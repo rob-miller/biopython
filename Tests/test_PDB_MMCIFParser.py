@@ -255,7 +255,6 @@ class ParseReal(unittest.TestCase):
                 "NDPQFGTSCEITGFGKEQSTDYLYPEQLKMTVVKLISHRECQQPHYYGSEVTTKMLCAADPQW"
                 "KTDSCQGDSGGPLVCSLQGRMTLTGIVSWGRGCALKDKPGVYTRVSHFLPWIRSHTKE"
             )
-
             s = pp.get_sequence()
             self.assertTrue(isinstance(s, Seq))
             self.assertEqual(s.alphabet, generic_protein)
