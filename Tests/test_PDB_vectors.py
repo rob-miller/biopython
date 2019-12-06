@@ -18,6 +18,7 @@ except ImportError:
 
 from Bio.PDB.vectors import Vector
 from Bio.PDB import rotmat, refmat, calc_angle, calc_dihedral, rotaxis, m2rotaxis
+from Bio.PDB.vectors import get_spherical_coordinates, coord_space
 
 
 class VectorTests(unittest.TestCase):
@@ -173,6 +174,40 @@ class VectorTests(unittest.TestCase):
             numpy.allclose(list(map(int, (axis - caxis).get_array())), [0, 0, 0]),
             "Want %r and %r to be almost equal" % (axis.get_array(), caxis.get_array()),
         )
+
+    def test_get_spherical_coordinates(self):
+        """Test spherical coordinates."""
+        srt22 = numpy.sqrt(2.0) / 2
+        sc = get_spherical_coordinates([[srt22], [srt22], [0.0]])
+        r45 = numpy.radians(45)
+        r90 = numpy.radians(90)
+        print(sc[0], numpy.degrees(sc[1]), numpy.degrees(sc[2]))
+        self.assertEqual(1.0, sc[0])  # r
+        self.assertEqual(r45, sc[1])  # azimuth
+        self.assertEqual(r90, sc[2])  # polar angle
+
+    def test_coord_space(self):
+        point_set = (
+            numpy.array([[2.0], [0.0], [2.0], [1.0]]),
+            numpy.array([[0.0], [0.0], [0.0], [1.0]]),
+            numpy.array([[0.0], [0.0], [2.0], [1.0]]),
+        )
+        mtxs = coord_space(point_set, True)
+        print(mtxs[0])
+        print(mtxs[1])
+        print()
+        rset = [0, 1, 2]
+        for i in range(0, 3):
+            rset[i] = mtxs[0].dot(point_set[i])
+        r2set = [0, 1, 2]
+        for i in range(0, 3):
+            r2set[i] = mtxs[1].dot(rset[i])
+
+        print(rset[0], rset[1], rset[2])
+        print()
+        print(r2set[0], r2set[1], r2set[2])
+
+        self.assertTrue(False)
 
 
 if __name__ == "__main__":
