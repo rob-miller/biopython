@@ -452,23 +452,29 @@ def homog_scale_mtx(scale):
     )
 
 
+def _get_azimuth(x, y):
+    sign = -1.0 if y < 0.0 else 1.0
+    return (
+        numpy.arctan2(y, x)
+        if (0 != x and 0 != y)
+        else (numpy.pi / 2.0 * sign)  # +/-90 if X=0, Y!=0
+        if 0 != y
+        else 0.0  # 0 if on z-axis
+    )
+
+
 def get_spherical_coordinates(xyz):
-    """Compute spherical coordinates (r, theta, phi) for X,Y,Z point.
+    """Compute spherical coordinates (r, azimuth, polar_angle) for X,Y,Z point.
 
     :param array xyz: column vector (3 row x 1 column numpy array)
-    :return: tuple of r, theta, phi for input coordinate
+    :return: tuple of r, azimuth, polar_angle for input coordinate
     """
     r = numpy.linalg.norm(xyz)
     if 0 == r:
         return numpy.array([0, 0, 0])
-    sign = -1.0 if xyz[1][0] < 0.0 else 1.0
-    theta = (
-        (numpy.pi / 2.0 * sign)
-        if 0 == xyz[0][0]
-        else numpy.arctan2(xyz[1][0], xyz[0][0])
-    )
-    phi = numpy.arccos(xyz[2][0] / r)
-    return (r, theta, phi)
+    azimuth = _get_azimuth(xyz[0][0], xyz[1][0])
+    polar_angle = numpy.arccos(xyz[2][0] / r)
+    return (r, azimuth, polar_angle)
 
 
 def coord_space(acs, rev=False):
@@ -493,10 +499,6 @@ def coord_space(acs, rev=False):
     a1 = acs[1]
     a2 = acs[2]
 
-    a10n = -a1[0]
-    a11n = -a1[1]
-    a12n = -a1[2]
-
     # tx acs[1] to origin
     tm = homog_trans_mtx(-a1[0], -a1[1], -a1[2])
 
@@ -508,28 +510,26 @@ def coord_space(acs, rev=False):
     #    print('p', p.transpose())
     #    print('sc', sc)
 
-    mrz = homog_rot_mtx(-sc[1], "z")  # rotate translated a3 -theta about Z
-    mry = homog_rot_mtx(-sc[2], "y")  # rotate translated a3 -phi about Y
+    mrz = homog_rot_mtx(-sc[1], "z")  # rotate translated a2 -azimuth about Z
+    mry = homog_rot_mtx(-sc[2], "y")  # rotate translated a2 -polar_angle about Y
 
-    # mt completes a2-a3 on Z-axis, still need to align a1 with XZ plane
+    # mt completes a1-a2 on Z-axis, still need to align a0 with XZ plane
     # mt = mry @ mrz @ tm  # python 3.5 and later
     mt = mry.dot(mrz.dot(tm))
 
     # if dbg:
-    #     print('mt * a2', (mt @ a2).transpose())
     #     print('mt * a2', (mt.dot(a2)).transpose())
 
     # p = mt @ a0
     p = mt.dot(a0)
 
-    # need theta of translated a0
+    # need azimuth of translated a0
     # sc2 = get_spherical_coordinates(p)
-    sign = -1.0 if (p[1][0] < 0.0) else 1.0
-    theta2 = (
-        (numpy.pi / 2.0 * sign) if 0 == p[0][0] else numpy.arctan2(p[1][0], p[0][0])
-    )
-    # rotate a0 -theta2 about Z to align with X
-    mrz2 = homog_rot_mtx(-theta2, "z")
+    # print(sc2)
+    azimuth2 = _get_azimuth(p[0][0], p[1][0])
+
+    # rotate a0 -azimuth2 about Z to align with X
+    mrz2 = homog_rot_mtx(-azimuth2, "z")
 
     # mt = mrz2 @ mt
     mt = mrz2.dot(mt)
@@ -540,7 +540,7 @@ def coord_space(acs, rev=False):
     # rev=True, so generate the reverse transformation
 
     # rotate a0 theta about Z, reversing alignment with X
-    mrz2 = homog_rot_mtx(theta2, "z")
+    mrz2 = homog_rot_mtx(azimuth2, "z")
     # rotate a2 phi about Y
     mry = homog_rot_mtx(sc[2], "y")
     # rotate a2 theta about Z
