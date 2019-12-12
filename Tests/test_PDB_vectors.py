@@ -18,7 +18,7 @@ except ImportError:
 
 from Bio.PDB.vectors import Vector
 from Bio.PDB import rotmat, refmat, calc_angle, calc_dihedral, rotaxis, m2rotaxis
-from Bio.PDB.vectors import get_spherical_coordinates, coord_space
+from Bio.PDB.vectors import get_spherical_coordinates, coord_space, homog_trans_mtx
 
 
 class VectorTests(unittest.TestCase):
@@ -178,36 +178,61 @@ class VectorTests(unittest.TestCase):
     def test_get_spherical_coordinates(self):
         """Test spherical coordinates."""
         srt22 = numpy.sqrt(2.0) / 2
-        sc = get_spherical_coordinates([[srt22], [srt22], [0.0]])
         r45 = numpy.radians(45)
         r90 = numpy.radians(90)
-        print(sc[0], numpy.degrees(sc[1]), numpy.degrees(sc[2]))
-        self.assertEqual(1.0, sc[0])  # r
-        self.assertEqual(r45, sc[1])  # azimuth
-        self.assertEqual(r90, sc[2])  # polar angle
+        r135 = numpy.radians(135)
+        for i in range(2):
+            for j in range(2):
+                for k in range(2):
+                    sc = get_spherical_coordinates(
+                        [
+                            [(0.5 if i else -0.5)],
+                            [0.5 if j else -0.5],
+                            [(1 if k else -1) * srt22],
+                        ]
+                    )
+                    # print(sc[0], numpy.degrees(sc[1]), numpy.degrees(sc[2]))
+                    self.assertEqual(1.0, sc[0])  # r
+                    self.assertEqual(
+                        (1 if j else -1) * (r45 if i else r135), sc[1]
+                    )  # azimuth
+                    self.assertEqual((r45 if k else r135), sc[2])  # polar angle
 
     def test_coord_space(self):
+        # start with 3 points already aligned to axes
         point_set = (
             numpy.array([[2.0], [0.0], [2.0], [1.0]]),
             numpy.array([[0.0], [0.0], [0.0], [1.0]]),
             numpy.array([[0.0], [0.0], [2.0], [1.0]]),
         )
+        # confirm get id matrix to transform to/from coord space
+        homog_id = numpy.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
         mtxs = coord_space(point_set, True)
-        print(mtxs[0])
-        print(mtxs[1])
-        print()
-        rset = [0, 1, 2]
-        for i in range(0, 3):
-            rset[i] = mtxs[0].dot(point_set[i])
-        r2set = [0, 1, 2]
-        for i in range(0, 3):
-            r2set[i] = mtxs[1].dot(rset[i])
+        for i in range(2):
+            self.assertTrue(numpy.array_equal(mtxs[i], homog_id))
+        # test in every quadrant
+        for i in range(2):
+            for j in range(2):
+                for k in range(2):
+                    # translate point_set arbitrary amount in each axis
+                    tm = homog_trans_mtx(
+                        (3 if i else -3), (3 if j else -3), (3 if k else -3)
+                    )
+                    ps2 = [1, 2, 3]
+                    for i in range(3):
+                        ps2[i] = tm.dot(point_set[i])
 
-        print(rset[0], rset[1], rset[2])
-        print()
-        print(r2set[0], r2set[1], r2set[2])
+                    # confirm coord_space puts points back to axis alignment
+                    mtxs = coord_space(ps2, True)
+                    rslt = [1, 2, 3]
+                    for i in range(3):
+                        rslt[i] = mtxs[0].dot(ps2[i])
+                    self.assertTrue(numpy.array_equal(rslt, point_set))
 
-        self.assertTrue(False)
+                    # confirm reverse transform returns translated points
+                    for i in range(3):
+                        rslt[i] = mtxs[1].dot(rslt[i])
+                    self.assertTrue(numpy.array_equal(rslt, ps2))
 
 
 if __name__ == "__main__":
