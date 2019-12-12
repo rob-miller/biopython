@@ -1491,7 +1491,7 @@ class IC_Residue(object):
             s += "\n"
         return s, col
 
-    def write_PIC(self, pdbid='0PDB', chainid='A', s=""):
+    def write_PIC(self, pdbid="0PDB", chainid="A", s=""):
         """Write PIC format lines for this residue.
 
         :param str pdbid: PDB idcode string; default 0PDB
@@ -1499,9 +1499,9 @@ class IC_Residue(object):
         :param str s: result string to add to
         """
         if pdbid is None:
-            pdbid = '0PDB'
+            pdbid = "0PDB"
         if chainid is None:
-            chainid = 'A'
+            chainid = "A"
         s += IC_Residue._residue_string(self.residue)
         if 0 == len(self.rprev):
             try:
@@ -2487,7 +2487,7 @@ class AtomKey(object):
     # PDB iCode = AChar = [A-Za-z]
 
     fieldNames = ("respos", "icode", "resname", "atm", "altloc", "occ")
-    fields = namedtuple("fieldsDef", "respos, icode, resname, " "atm, altloc, occ")(
+    fields = namedtuple("fieldsDef", "respos, icode, resname, atm, altloc, occ")(
         0, 1, 2, 3, 4, 5
     )
 
