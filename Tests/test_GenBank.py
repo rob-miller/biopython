@@ -6354,7 +6354,7 @@ class GenBankTests(unittest.TestCase):
             with self.assertRaises(BiopythonParserWarning) as cm:
                 record = SeqIO.read(path, "genbank")
             self.assertIn(
-                "It appears that '6801..100' is a feature " "that spans the origin",
+                "It appears that '6801..100' is a feature that spans the origin",
                 str(cm.exception),
             )
 
@@ -6385,19 +6385,19 @@ class GenBankTests(unittest.TestCase):
             self.assertIsInstance(record.features[3].location, CompoundLocation)
             self.assertEqual(
                 str(record.features[3].location),
-                "join{[<5399:5600](+), [5699:6100](+), " "[6800:7000](+), [0:100](+)}",
+                "join{[<5399:5600](+), [5699:6100](+), [6800:7000](+), [0:100](+)}",
             )
 
             self.assertIsInstance(record.features[4].location, CompoundLocation)
             self.assertEqual(
                 str(record.features[4].location),
-                "join{[5399:5600](+), [5699:6100](+), " "[<6800:7000](+), [0:100](+)}",
+                "join{[5399:5600](+), [5699:6100](+), [<6800:7000](+), [0:100](+)}",
             )
 
             self.assertIsInstance(record.features[5].location, CompoundLocation)
             self.assertEqual(
                 str(record.features[5].location),
-                "join{[5399:5600](+), [5699:6100](+), " "[0:100](-), [<6800:7000](-)}",
+                "join{[5399:5600](+), [5699:6100](+), [0:100](-), [<6800:7000](-)}",
             )
 
     def test_implicit_orign_wrap_extract_and_translate(self):
@@ -6410,11 +6410,11 @@ class GenBankTests(unittest.TestCase):
         seq_features = seq_record.features
         self.assertEqual(
             str(seq_features[1].extract(seq_record).seq.lower()),
-            "atgccctataaaacccagggctgccttggaaaaggcgcaacccc" "aaccccctcgagccgcggcatataa",
+            "atgccctataaaacccagggctgccttggaaaaggcgcaaccccaaccccctcgagccgcggcatataa",
         )
         self.assertEqual(
             str(seq_features[2].extract(seq_record).seq.lower()),
-            "atgccgcggctcgagggggttggggttgcgccttttccaaggca" "gccctgggttttatag",
+            "atgccgcggctcgagggggttggggttgcgccttttccaaggcagccctgggttttatag",
         )
         self.assertEqual(
             str(seq_features[1].extract(seq_record).seq.translate()),
@@ -6599,6 +6599,18 @@ KEYWORDS    """
             "REVIEWED REFSEQ: This record has been curated by NCBI staff. The\n"
             "reference sequence was derived from AP000423.\n"
             "COMPLETENESS: full length.",
+        )
+
+    def test_multiline_structured_comment_parsing(self):
+        """Multiline structured comment parsing."""
+        # GU949562.1, MIENS-Data, environment has value on multiple lines
+        path = "GenBank/GU949562.1.gb"
+        record = SeqIO.read(path, "genbank")
+        self.assertEqual(
+            record.annotations["structured_comment"]["MIENS-Data"]["environment"],
+            "Temperate shelf and sea biome [ENVO:00000895], "
+            "coastal water body [ENVO:02000049], "
+            "coastal water [ENVO:00002150]"
         )
 
     def test_locus_line_topogoly(self):
@@ -7231,7 +7243,7 @@ class GenBankScannerTests(unittest.TestCase):
         self.assertEqual(l_r[0].id, "NC_000932.1")
         self.assertEqual(l_r[0].name, "NC_000932")
         self.assertEqual(
-            l_r[0].description, "Arabidopsis thaliana chloroplast, " "complete genome"
+            l_r[0].description, "Arabidopsis thaliana chloroplast, complete genome"
         )
         self.assertEqual(len(l_r[0].features), 0)
 
@@ -7242,7 +7254,7 @@ class GenBankScannerTests(unittest.TestCase):
         self.assertEqual(l_r[0].id, "NC_000932.1")
         self.assertEqual(l_r[0].name, "NC_000932")
         self.assertEqual(
-            l_r[0].description, "Arabidopsis thaliana chloroplast, " "complete genome"
+            l_r[0].description, "Arabidopsis thaliana chloroplast, complete genome"
         )
         self.assertEqual(len(l_r[0].features), 259)
 

@@ -122,6 +122,7 @@ please open an issue on GitHub or mention it on the mailing list.
 - Ivan Antonov <https://github.com/vanya-antonov>
 - Jacek Śmietański <https://github.com/dadoskawina>
 - Jack Twilley <https://github.com/mathuin>
+- Jakub Lipinski <https://github.com/jakublipinski>
 - James Casbon <https://github.com/jamescasbon>
 - James Jeffryes <https://github.com/JamesJeffryes>
 - Jared Andrews <https://github.com/j-andrews7>
@@ -184,10 +185,12 @@ please open an issue on GitHub or mention it on the mailing list.
 - Matt Ruffalo <https://github.com/mruffalo>
 - Matt Shirley <https://github.com/mdshw5>
 - Matteo Sticco <https://github.com/sticken88>
+- Matteo Ugolotti <https://github.com/matteougolotti>
 - Maximilian Greil <https://github.com/MaxGreil>
 - Maximilian Peters <maximili.peters at mail.huji.ac.il>
 - Melissa Gymrek <https://github.com/mgymrek>
 - Michael Hoffman <https://github.com/michaelmhoffman>
+- Michael R. Crusoe <https://orcid.org/0000-0002-2961-9670>
 - Michal Kurowski <michal at domain genesilico.pl>
 - Michał J. Gajda <https://github.com/mgajda>
 - Michiel de Hoon <https://github.com/mdehoon>

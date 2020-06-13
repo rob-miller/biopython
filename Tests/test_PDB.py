@@ -650,14 +650,10 @@ class ParseReal(unittest.TestCase):
     def test_empty(self):
         """Parse an empty file."""
         parser = PDBParser()
-        filenumber, filename = tempfile.mkstemp()
-        os.close(filenumber)
-        try:
-            struct = parser.get_structure("MT", filename)
-            # Structure has no children (models)
-            self.assertFalse(len(struct))
-        finally:
-            os.remove(filename)
+        handle = StringIO()
+        with self.assertRaises(ValueError) as context_manager:
+            struct = parser.get_structure("MT", handle)
+        self.assertEqual(str(context_manager.exception), "Empty file.")
 
     def test_residue_sort(self):
         """Sorting atoms in residues."""
