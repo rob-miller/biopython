@@ -350,6 +350,7 @@ class IC_Chain:
         last_res: List["IC_Residue"] = []
         last_ord_res: List["IC_Residue"] = []
 
+        atomCoordDict = {}
         for res in self.chain.get_residues():
             # select only not hetero or accepted hetero
             if res.id[0] == " " or res.id[0] in IC_Residue.accept_resnames:
@@ -366,7 +367,22 @@ class IC_Chain:
                 if 0 < len(this_res):
                     self.ordered_aa_ic_list.extend(this_res)
                     last_ord_res = this_res
+                    for ric in this_res:
+                        atomCoordDict.update(ric.atom_coords_vw)
+
                 last_res = this_res
+
+        if atomCoordDict != {}:
+            aa = numpy.array(tuple(atomCoordDict.values()))
+            self.atomArray = numpy.insert(aa, 3, 1, axis=1)
+            # self.atomVwArray = aa  # rtm:BpAtmVw
+            self.atomArrayIndex = dict(
+                zip(atomCoordDict.keys(), range(len(atomCoordDict)))
+            )
+
+            for ric in self.ordered_aa_ic_list:
+                for ak in ric.atom_coords_vw.keys():
+                    ric.atom_coords[ak] = self.atomArray[self.atomArrayIndex[ak]]
 
     def link_residues(self) -> None:
         """link_dihedra() for each IC_Residue; needs rprev, rnext set.
@@ -422,6 +438,9 @@ class IC_Chain:
 
         IC atom_coords are homogeneous [4], Biopython atom coords are XYZ [3].
         """
+        # rtm TODO: improve with numpy views on biopython Atom numpy array?
+        # rtm:BpAtmVw
+
         self.ndx = 0
         for res in self.chain.get_residues():
             if 2 == res.is_disordered():
@@ -1142,7 +1161,10 @@ class IC_Residue(object):
         residues in chain
     atom_coords: AtomKey indexed dict of numpy [4] arrays
         Local copy of atom homogeneous coordinates [4] for work
+        Actually a view into IC_Chain's atomArray
         distinct from Bopython Residue/Atom values
+    atom_coords_vw: AtomKey indexed dict of numpy [3] arrays
+        Numpy view into Biopython Residue/Atom values
     alt_ids: list of char
         AltLoc IDs from PDB file
     bfactors: dict
@@ -1212,7 +1234,8 @@ class IC_Residue(object):
     assemble(atomCoordsIn, resetLocation, verbose)
         Compute atom coordinates for this residue from internal coordinates
     atm241(coord)
-        Convert 1x3 cartesian coords to 4x1 homogeneous coords
+        Convert 1x3 cartesian coords to 1x4 homogeneous coords
+        Naming: 4x1 array is correct, but numpy handles automatically
     coords_to_residue()
         Convert homogeneous atom_coords to Biopython cartesian Atom coords
     atom_to_internal_coordinates(verbose)
@@ -1255,7 +1278,7 @@ class IC_Residue(object):
         :param NO_ALTLOC: bool default False
             Option to disable processing altloc disordered atoms, use selected.
         """
-        # NO_ALTLOC=True will turn off alotloc positions and just use selected
+        # NO_ALTLOC=True will turn off altloc positions and just use selected
         self.residue = parent
         self.cic: IC_Chain
         # dict of hedron objects indexed by hedron keys
@@ -1277,7 +1300,8 @@ class IC_Residue(object):
         # local copy, homogeneous coordinates for atoms, numpy [4]
         # generated from dihedra include some i+1 atoms
         # or initialised here from parent residue if loaded from coordinates
-        self.atom_coords: Dict["AtomKey", numpy.array] = {}
+        self.atom_coords: Dict["AtomKey", numpy.array] = {}  # homog coords
+        self.atom_coords_vw: Dict["AtomKey", numpy.array] = {}  # view on Atoms
         # bfactors copied from PDB file
         self.bfactors: Dict[str, float] = {}
         self.alt_ids: Union[List[str], None] = None if NO_ALTLOC else []
@@ -1472,7 +1496,7 @@ class IC_Residue(object):
 
     @staticmethod
     def atm241(coord: numpy.array) -> numpy.array:
-        """Convert 1x3 cartesian coordinates to 4x1 homogeneous coordinates."""
+        """Convert 1x3 cartesian coordinates to 1x4 homogeneous coordinates."""
         arr41 = numpy.empty(4)
         arr41[0:3] = coord
         arr41[3] = 1.0
@@ -1492,7 +1516,7 @@ class IC_Residue(object):
             # print('skip:', atm.name)
             return
         ak = self.rak(atm)  # passing Atom here not string
-        self.atom_coords[ak] = IC_Residue.atm241(atm.coord)
+        self.atom_coords_vw[ak] = atm.coord
         self.ak_set.add(ak)
 
     def __repr__(self) -> str:
