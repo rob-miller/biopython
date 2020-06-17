@@ -77,7 +77,8 @@ except ImportError:
 from Bio.PDB.Atom import Atom, DisorderedAtom
 from Bio.PDB.Polypeptide import three_to_one
 
-from Bio.PDB.vectors import coord_space, multi_rot_Z, multi_rot_Y
+from Bio.PDB.vectors import multi_coord_space, multi_rot_Z, multi_rot_Y
+from Bio.PDB.vectors import coord_space
 
 # , calc_dihedral, Vector
 from Bio.PDB.ic_data import ic_data_backbone, ic_data_sidechains
@@ -380,6 +381,7 @@ class IC_Chain:
                 zip(atomCoordDict.keys(), range(len(atomCoordDict)))
             )
 
+            # set all ric.atom_coords to be views on chain atomArray
             for ric in self.ordered_aa_ic_list:
                 for ak in ric.atom_coords_vw.keys():
                     ric.atom_coords[ak] = self.atomArray[self.atomArrayIndex[ak]]
@@ -392,6 +394,13 @@ class IC_Chain:
         for ric in self.ordered_aa_ic_list:
             ric.cic = self
             ric.link_dihedra()
+
+    # def ar2(        self,
+    #    verbose: bool = False,
+    #    start: Optional[int] = None,
+    #    fin: Optional[int] = None,
+    # ) -> None:
+    #    """generate atom coords from internal, numpy edition."""
 
     def assemble_residues(
         self,
@@ -782,42 +791,7 @@ class IC_Chain:
         )
 
         # develop coord_space matrix for 1st 3 atoms of dihedra:
-
-        # build tm translation matrix: atom1 to origin
-        tm = numpy.empty((dLen, 4, 4))
-        tm[...] = numpy.identity(4)
-        tm[:, 0:3, 3] = -dha[:, 1, 0:3]
-
-        # directly translate a2 into new space using a1
-        p = dha[:, 2] - dha[:, 1]
-
-        # get spherical coords of translated a2 (p)
-        r = numpy.linalg.norm(p, axis=1)
-        azimuth = numpy.arctan2(p[:, 1], p[:, 0])
-        polar_angle = numpy.arccos(numpy.divide(p[:, 2], r, where=r != 0))
-
-        # build rz rotation matrix: translated a2 -azimuth around Z
-        # (enables next step rotating around Y to align with Z)
-        rz = multi_rot_Z(-azimuth)
-
-        # build ry rotation matrix: translated a2 -polar_angle around Y
-        ry = multi_rot_Y(-polar_angle)
-
-        # mt completes a1-a2 on Z-axis, still need to align a0 with XZ plane
-        mt = numpy.matmul(ry, numpy.matmul(rz, tm))
-
-        # transform a0 to mt space
-        p = numpy.matmul(mt, dha[:, 0].reshape(-1, 4, 1)).reshape(-1, 4)
-        # print("mt[0]:\n", mt[0], "\ndha[0][0] (a0):\n", dha[0][0], "\np[0]:\n", p[0])
-
-        # get azimuth of translated a0
-        azimuth2 = numpy.arctan2(p[:, 1], p[:, 0])
-
-        # build rotation matrix rz2 to rotate a0 -azimuth about Z to align with X
-        rz2 = multi_rot_Z(-azimuth2)
-
-        # update mt to be complete transform into hedron coordinate space
-        mt = numpy.matmul(rz2, mt[:])
+        mt = multi_coord_space(dha, dLen, False)
 
         # now put atom 4 into that coordinate space and read dihedral as azimuth
         do4 = numpy.matmul(mt, dha[:, 3].reshape(-1, 4, 1)).reshape(-1, 4)
@@ -1812,7 +1786,7 @@ class IC_Residue(object):
 
                             atomCoords[akl[3]] = numpy.round(
                                 acak3, 3
-                            )  # round to PDB format 8.3
+                            )  # round to PDB format 8.3 # rtm:fix
                             # if dbg:
                             #    print(
                             #        "        3- finished, ak:",
