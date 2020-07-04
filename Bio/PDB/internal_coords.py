@@ -421,39 +421,17 @@ class IC_Chain:
 
             cspace = multi_coord_space(workSet, numpy.sum(workSelector), True)
             initCoords = self.dAtoms[workSelector].reshape(-1, 4, 4)
-            acak3 = numpy.einsum("ijk,ik->ij", cspace[1], initCoords[:, 3])
-
             updateMap = d2a_map[workNdxs, 3][0]
-            self.atomArray[updateMap] = numpy.round(acak3, 3)  # rtm do elsewhere
+            self.atomArray[updateMap] = numpy.einsum(
+                "ijk,ik->ij", cspace[1], initCoords[:, 3]
+            )
             self.atomArrayValid[updateMap] = True
 
-            foo = self.a2d_map[updateMap]
-            bar = self.atomArray[updateMap]
-            # for i in range(updateMap.size):
-            #    atm = self.atomArray[updateMap[i]]
-            #    for tpl in foo[i]:
-            #        dSet[tpl] = atm
-
-            for i in updateMap:
-                atm = self.atomArray[i]
-                for tpl in self.a2d_map[i]:
-                    dSet[tpl] = atm
-            #    # dSetValid[tpl] = True
-
-            #    dUpdate = numpy.where(self.a2da_map == i)
-            #    dSet[dUpdate] = self.atomArray[i]
-
-            # dSet = self.atomArray[self.a2da_map].reshape(-1, 4, 4)
+            for a in updateMap:
+                dSet[self.a2d_map[a]] = self.atomArray[a]
 
             dSetValid = self.atomArrayValid[self.a2da_map].reshape(-1, 4)
             workSelector = (dSetValid == targ).all(axis=1)
-
-        # cspace = multi_coord_space(dSet, self.dihedraLen, True)
-        # initCoords = self.dAtoms.reshape(-1, 4, 4)
-        # acak3 = numpy.einsum("ijk,ik->ij", cspace[1], initCoords[:, 3])
-        # dSet[workNdxs, 3] = acak3[workNdxs]
-
-        return
 
     def assemble_residues(
         self,
@@ -614,7 +592,7 @@ class IC_Chain:
 
         self.a4_pre_rotation = numpy.empty((self.dihedraLen, 4))
         a2da_map = {}  # numpy.empty(self.dihedraLen * 4, dtype=numpy.int)
-        a2d_map = {i: [] for i in range(self.atomArrayValid.size)}
+        a2d_map = [[[], []] for _ in range(self.atomArrayValid.size)]
 
         for k, d in self.dihedra.items():
             dndx = self.dihedraNdx[k]
@@ -625,10 +603,13 @@ class IC_Chain:
             for i in range(4):
                 ndx = self.atomArrayIndex[k[i]]
                 a2da_map[dstep + i] = ndx
-                a2d_map[ndx].append((dndx, i))
+                a2d_map[ndx][0].append(dndx)
+                a2d_map[ndx][1].append(i)
 
         self.a2da_map = numpy.array(tuple(a2da_map.values()))
-        self.a2d_map = numpy.array(tuple(a2d_map.values()))
+
+        # manually create numpy.where(atom in dihedral)
+        self.a2d_map = [(numpy.array(xi[0]), numpy.array(xi[1])) for xi in a2d_map]
 
         self.dAtoms_needs_update = numpy.full(self.dihedraLen, True)
 
@@ -2380,7 +2361,7 @@ class IC_Residue(object):
                 (icode == " " and ak.akl[icNdx] is None) or icode == ak.akl[icNdx]
             ):
 
-                ac = self.atom_coords[ak]
+                ac = numpy.round(self.atom_coords[ak], 3)
                 atm_coords = ac[:3]
                 akl = ak.akl
                 atm, altloc = akl[atmNdx], akl[altlocNdx]
