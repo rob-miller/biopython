@@ -187,25 +187,15 @@ class Chain(Entity):
             self.internal_coord = IC_Chain(self, verbose)
         self.internal_coord.atom_to_internal_coordinates(verbose=verbose)
 
-    def internal_to_atom_coordinates(
-        self,
-        verbose: bool = False,
-        start: Optional[int] = None,
-        fin: Optional[int] = None,
-    ):
+    def internal_to_atom_coordinates(self, verbose: bool = False):
         """Create/update atom coordinates from internal coordinates.
 
         :param verbose bool: default False
             describe runtime problems
-        :param: start, fin lists
-            sequence position, insert code for begin, end of subregion to
-            process
         :raises Exception: if any chain does not have .pic attribute
         """
         if self.internal_coord:
-            self.internal_coord.internal_to_atom_coordinates(
-                verbose=verbose, start=start, fin=fin
-            )
+            self.internal_coord.internal_to_atom_coordinates(verbose=verbose)
         else:
             raise Exception(
                 "Structure %s Chain %s does not have internal coordinates set"
