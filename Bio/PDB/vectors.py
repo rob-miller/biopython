@@ -715,9 +715,8 @@ def multi_coord_space(a3: numpy.ndarray, dLen: int, rev: bool = False) -> numpy.
     if not rev:
         return numpy.matmul(rz2, mt[:])
 
-    mt = numpy.matmul(rz2, mt[:])
-
     # rev=True, so generate the reverse transformation
+    mt = numpy.matmul(rz2, mt[:])
 
     # rotate a0 theta about Z, reversing alignment with X
     mrz2 = multi_rot_Z(azimuth2)
