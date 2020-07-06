@@ -168,6 +168,11 @@ class IC_Chain:
 
     dAtoms_needs_update: booleans indicating whether dAtoms represent dihedraIC
 
+    dCoordSpace: forward and reverse transform matrices standardising positions
+        of first hedron
+
+    dcs_valid: booleans indicating dCoordSpace up to date
+
     Methods
     -------
     internal_to_atom_coordinates(verbose, start, fin)
@@ -192,6 +197,7 @@ class IC_Chain:
     """
 
     MaxPeptideBond = 1.4  # larger C-N distance than this is chain break
+    dihedraSelect = numpy.array([True, True, True, False])  # for assemble_residues
 
     def __init__(self, parent: "Chain", verbose: bool = False) -> None:
         """Initialize IC_Chain object, with or without residue/Atom data.
@@ -404,33 +410,47 @@ class IC_Chain:
         start: Optional[int] = None,
         fin: Optional[int] = None,
     ) -> None:
-        """Generate atom coords from internal, numpy edition."""
-        # dihedral with 3 valid atoms
-        targ = numpy.array([True, True, True, False])
-        d2a_map = self.a2da_map.reshape(-1, 4)
+        """Generate atom coords from internal, vectorised."""
+        a2da_map = self.a2da_map
+        a2d_map = self.a2d_map
+        d2a_map = self.d2a_map
+        atomArray = self.atomArray
+        atomArrayValid = self.atomArrayValid
+        dAtoms = self.dAtoms
+        dCoordSpace = self.dCoordSpace
+        dcsValid = self.dcsValid
 
-        dSet = self.atomArray[self.a2da_map].reshape(-1, 4, 4)
-        dSetValid = self.atomArrayValid[self.a2da_map].reshape(-1, 4)
-        # 43 dihedra  44 atoms
-
+        # dSet is 4-atom arrays for every dihedral, multiple copies of
+        # many atoms as the dihedra overlap
+        dSet = atomArray[a2da_map].reshape(-1, 4, 4)
+        # dSetValid indicates accurate atom positions in each dSet dihedral
+        dSetValid = atomArrayValid[a2da_map].reshape(-1, 4)
+        # mask for dihedral with 3 valid atoms in dSet, ready to be processed:
+        targ = IC_Chain.dihedraSelect
+        # select the dihedrals ready for processing
         workSelector = (dSetValid == targ).all(axis=1)
 
         while numpy.any(workSelector):
-            workNdxs = numpy.where(workSelector)  # (dSetValid == targ).all(axis=1))
+            workNdxs = numpy.where(workSelector)
             workSet = dSet[workSelector]
+            updateMap = d2a_map[workNdxs, 3][0]
 
             cspace = multi_coord_space(workSet, numpy.sum(workSelector), True)
-            initCoords = self.dAtoms[workSelector].reshape(-1, 4, 4)
-            updateMap = d2a_map[workNdxs, 3][0]
-            self.atomArray[updateMap] = numpy.einsum(
+
+            dCoordSpace[workSelector] = numpy.swapaxes(cspace, 0, 1)
+            dcsValid[workSelector] = True
+
+            initCoords = dAtoms[workSelector].reshape(-1, 4, 4)
+
+            atomArray[updateMap] = numpy.einsum(
                 "ijk,ik->ij", cspace[1], initCoords[:, 3]
             )
-            self.atomArrayValid[updateMap] = True
+            atomArrayValid[updateMap] = True
 
             for a in updateMap:
-                dSet[self.a2d_map[a]] = self.atomArray[a]
+                dSet[a2d_map[a]] = atomArray[a]
 
-            dSetValid = self.atomArrayValid[self.a2da_map].reshape(-1, 4)
+            dSetValid = atomArrayValid[a2da_map].reshape(-1, 4)
             workSelector = (dSetValid == targ).all(axis=1)
 
     def assemble_residues(
@@ -481,6 +501,7 @@ class IC_Chain:
         # rtm TODO: improve with numpy views on biopython Atom numpy array?
         # rtm:BpAtmVw
 
+        numpy.round(self.atomArray, decimals=3, out=self.atomArray)
         self.ndx = 0
         for res in self.chain.get_residues():
             if 2 == res.is_disordered():
@@ -590,6 +611,12 @@ class IC_Chain:
         )
         self.dAtoms[:, :, 3] = 1.0  # homogeneous
 
+        self.dCoordSpace: numpy.ndarray = numpy.empty(
+            (self.dihedraLen, 2, 4, 4), dtype=numpy.float64
+        )
+
+        self.dcsValid: numpy.ndarray = numpy.zeros((self.dihedraLen), dtype=numpy.bool)
+
         self.a4_pre_rotation = numpy.empty((self.dihedraLen, 4))
         a2da_map = {}  # numpy.empty(self.dihedraLen * 4, dtype=numpy.int)
         a2d_map = [[[], []] for _ in range(self.atomArrayValid.size)]
@@ -607,6 +634,7 @@ class IC_Chain:
                 a2d_map[ndx][1].append(i)
 
         self.a2da_map = numpy.array(tuple(a2da_map.values()))
+        self.d2a_map = self.a2da_map.reshape(-1, 4)
 
         # manually create numpy.where(atom in dihedral)
         self.a2d_map = [(numpy.array(xi[0]), numpy.array(xi[1])) for xi in a2d_map]
@@ -2361,7 +2389,7 @@ class IC_Residue(object):
                 (icode == " " and ak.akl[icNdx] is None) or icode == ak.akl[icNdx]
             ):
 
-                ac = numpy.round(self.atom_coords[ak], 3)
+                ac = self.atom_coords[ak]
                 atm_coords = ac[:3]
                 akl = ak.akl
                 atm, altloc = akl[atmNdx], akl[altlocNdx]
@@ -2947,7 +2975,7 @@ class Hedron(Edron):
     def _invalidate_atoms(self):
         self.cic.hAtoms_needs_update[self.cic.hedraNdx[self.aks]] = True
         for ak in self.aks:
-            self.cic.atomArrayValid[self.cic.AtomArrayIndex[ak]] = False
+            self.cic.atomArrayValid[self.cic.atomArrayIndex[ak]] = False
 
     @angle.setter
     def angle(self, angle_deg) -> None:
