@@ -440,7 +440,10 @@ class IC_Chain:
 
             initCoords = dAtoms[workSelector].reshape(-1, 4, 4)
 
-            atomArray[updateMap] = np.einsum("ijk,ik->ij", cspace[1], initCoords[:, 3])
+            atomArray[updateMap] = np.round(
+                np.einsum("ijk,ik->ij", cspace[1], initCoords[:, 3]), 3
+            )  # must round here or get coordinate drift along chain
+
             atomArrayValid[updateMap] = True
 
             for a in updateMap:
@@ -448,6 +451,16 @@ class IC_Chain:
 
             dSetValid = atomArrayValid[a2da_map].reshape(-1, 4)
             workSelector = (dSetValid == targ).all(axis=1)
+
+        # ensure all transforms set - possible issue for OpenSCAD output with
+        # altloc atoms
+
+        if not dcsValid.all():
+            workSelector = ~dcsValid
+            workSet = dSet[workSelector]
+            cspace = multi_coord_space(workSet, np.sum(workSelector), True)
+            dCoordSpace[workSelector] = np.swapaxes(cspace, 0, 1)
+            dcsValid[workSelector] = True
 
     def assemble_residues(
         self,
@@ -497,7 +510,10 @@ class IC_Chain:
         # rtm TODO: improve with np views on biopython Atom np array?
         # rtm:BpAtmVw
 
-        np.round(self.atomArray, decimals=3, out=self.atomArray)
+        # rounding here is faster than in assemble_residues, but get drift
+        # along chain as process structure
+        # np.round(self.atomArray, decimals=3, out=self.atomArray)
+
         self.ndx = 0
         for res in self.chain.get_residues():
             if 2 == res.is_disordered():
@@ -594,8 +610,10 @@ class IC_Chain:
 
         for ric in self.ordered_aa_ic_list:
             for k, h in ric.hedra.items():
+                hndx = self.hedraNdx[k]
                 # all h.lal become views on hedraIC
-                h.lal = self.hedraIC[self.hedraNdx[k]]
+                h.lal = self.hedraIC[hndx]
+                h.ndx = hndx
 
         # dihedra
         self.dihedraNdx = dict(zip(self.dihedra.keys(), range(len(self.dihedra))))
@@ -615,8 +633,11 @@ class IC_Chain:
 
         for k, d in self.dihedra.items():
             dndx = self.dihedraNdx[k]
+            d.ndx = dndx
             d.initial_coords = self.dAtoms[dndx]
             d.a4_pre_rotation = self.a4_pre_rotation[dndx]
+            d.cst = self.dCoordSpace[dndx][0]
+            d.rcst = self.dCoordSpace[dndx][1]
             # build map between atomArray and dAtoms
             dstep = dndx * 4
             for i in range(4):
@@ -1060,7 +1081,7 @@ class IC_Chain:
                     if d.h2key in hedraNdx and (
                         (i == 0 and d.is_backbone()) or (i == 1 and not d.is_backbone())
                     ):
-                        if d.rcst is not None:
+                        if d.cic.dcsValid[d.ndx]:  # d.rcst is not None:
                             if started:
                                 fp.write(",\n")
                             else:
@@ -1285,7 +1306,8 @@ class IC_Residue(object):
         be closed.  This variable is managed by the Write_SCAD() code and enables
         this.
     cic: IC_Chain default None
-        parent chain IC_Chain object
+        parent chain IC_Chain object, set in IC_Chain link_residues() and
+        add_residue()
 
     scale: optional float
         used for OpenSCAD output to generate gly_Cbeta bond length
@@ -1740,8 +1762,7 @@ class IC_Residue(object):
     def clear_transforms(self):
         """Set cst and rcst attributes to none before assemble()."""
         for d in self.dihedra.values():
-            d.cst = None
-            d.rcst = None
+            self.cic.dcsValid[d.ndx] = False
 
     def assemble(
         self, resetLocation: bool = False, verbose: bool = False,
@@ -1856,19 +1877,23 @@ class IC_Residue(object):
                             q.appendleft(d_h2key)
                             # if dbg:
                             #    print("    4- already done, append left")
-                            if d.rcst is None:  # missing transform
+                            if not d.cic.dcsValid[
+                                d.ndx
+                            ]:  # d.rcst is None:  # missing transform
                                 # can happen for altloc atoms
                                 # only needed for write_SCAD output
                                 acs = [atomCoords[a] for a in h1k]
                                 d.cst, d.rcst = coord_space(
                                     acs[0], acs[1], acs[2], True
                                 )
+                                d.cic.dcsValid[d.ndx] = True
                         elif 3 == acount:
                             # if dbg:
                             #    print("    3- call coord_space")
 
                             acs = [atomCoords[a] for a in h1k]
                             d.cst, d.rcst = coord_space(acs[0], acs[1], acs[2], True)
+                            d.cic.dcsValid[d.ndx] = True
                             # print(d.cst)
                             # print(d.rcst)
                             # if dbg:
@@ -2695,7 +2720,11 @@ class Edron(object):
         A compiled regular expression matching string IDs for Hedron
         and Dihedron objects
     cic: IC_Chain reference
-        Chain internal coords object containing this hedron
+        Chain internal coords object containing this hedron; set in
+        IC_Residue link_dihedra()
+    ndx: int
+        index into IC_Chain level numpy data arrays for di/hedra.
+        Set in IC_Chain init_edra()
 
     Methods
     -------
@@ -3058,7 +3087,8 @@ class Dihedron(Edron):
     cst, rcst: np array [4][4]
         transforms to and from coordinate space defined by first hedron.
         set by IC_Residue.assemble().  defined by id3 order NOT h1key order
-        (atoms may be reversed between these two)
+        (atoms may be reversed between these two).  View on IC_Chain
+        dCoordSpace
 
     Methods
     -------
