@@ -195,7 +195,9 @@ class IC_Chain:
     """
 
     MaxPeptideBond = 1.4  # larger C-N distance than this is chain break
-    dihedraSelect = np.array([True, True, True, False])  # for assemble_residues
+    # for assemble_residues
+    dihedraSelect = np.array([True, True, True, False])
+    dihedraOK = np.array([True, True, True, True])
 
     def __init__(self, parent: "Chain", verbose: bool = False) -> None:
         """Initialize IC_Chain object, with or without residue/Atom data.
@@ -402,13 +404,8 @@ class IC_Chain:
             ric.link_dihedra()
 
     # @profile
-    def ar2(
-        self,
-        verbose: bool = False,
-        start: Optional[int] = None,
-        fin: Optional[int] = None,
-    ) -> None:
-        """Generate atom coords from internal, vectorised."""
+    def ar2(self) -> None:
+        """Generate atom coords from internal coords, vectorised."""
         a2da_map = self.a2da_map
         a2d_map = self.a2d_map
         d2a_map = self.d2a_map
@@ -423,6 +420,11 @@ class IC_Chain:
         dSet = atomArray[a2da_map].reshape(-1, 4, 4)
         # dSetValid indicates accurate atom positions in each dSet dihedral
         dSetValid = atomArrayValid[a2da_map].reshape(-1, 4)
+
+        # clear any transforms for dihedrals with outdated atoms
+        workSelector = (dSetValid == self.dihedraOK).all(axis=1)
+        dcsValid[~workSelector] = False
+
         # mask for dihedral with 3 valid atoms in dSet, ready to be processed:
         targ = IC_Chain.dihedraSelect
         # select the dihedrals ready for processing
@@ -773,14 +775,8 @@ class IC_Chain:
             for ak in ric.ak_set:
                 ric.atom_coords[ak] = self.atomArray[self.atomArrayIndex[ak]]
 
-        pass
-
     def internal_to_atom_coordinates(
-        self,
-        verbose: bool = False,
-        start: Optional[int] = None,
-        fin: Optional[int] = None,
-        promote: Optional[bool] = True,
+        self, verbose: bool = False, promote: Optional[bool] = True,
     ) -> None:
         """Process, IC data to Residue/Atom coords.
 
@@ -788,9 +784,6 @@ class IC_Chain:
 
         :param verbose bool: default False
             describe runtime problems
-        :param: start, fin lists
-            sequence position, insert code for begin, end of subregion to
-            process
         :param promote bool: default True
             If True (the default) copy result atom XYZ coordinates to
             Biopython Atom objects for access by other Biopython methods;
@@ -800,8 +793,23 @@ class IC_Chain:
         if self.dihedra == {}:
             return  # escape if nothing to process
 
+        if verbose:
+            for ric in self.ordered_aa_ic_list:
+                if not hasattr(ric, "NCaCKey"):
+                    print(f"no assembly for {ric} due to missing N, Ca and/or C atoms")
+
         self.init_atom_coords()
-        self.ar2(verbose=verbose, start=start, fin=fin)  # internal to XYZ coordinates
+        self.ar2()
+
+        if verbose and not np.all(self.atomArrayValid):
+            dSetValid = self.atomArrayValid[self.a2da_map].reshape(-1, 4)
+            for ric in self.ordered_aa_ic_list:
+
+                for k, d in ric.dihedra.items():
+                    if not dSetValid[d.ndx].all():
+                        print(
+                            f"missing coordinates for chain {ric.cic.chain.id} {ric.pretty_str()} dihedral: {d.id}"
+                        )
 
         # self.assemble_residues(
         #    verbose=verbose, start=start, fin=fin
@@ -1044,6 +1052,7 @@ class IC_Chain:
         dihedraNdx = {}
         ndx = 0
         chnStarted = False
+
         for ric in self.ordered_aa_ic_list:
             if "O" not in ric.akc:
                 if ric.lc != "G" and ric.lc != "A":
@@ -1877,9 +1886,7 @@ class IC_Residue(object):
                             q.appendleft(d_h2key)
                             # if dbg:
                             #    print("    4- already done, append left")
-                            if not d.cic.dcsValid[
-                                d.ndx
-                            ]:  # d.rcst is None:  # missing transform
+                            if not d.cic.dcsValid[d.ndx]:  # missing transform
                                 # can happen for altloc atoms
                                 # only needed for write_SCAD output
                                 acs = [atomCoords[a] for a in h1k]
@@ -2402,8 +2409,10 @@ class IC_Residue(object):
 
         for ak in sorted(self.atom_coords):
             # print(ak)
-            if respos == ak.akl[spNdx] and (
-                (icode == " " and ak.akl[icNdx] is None) or icode == ak.akl[icNdx]
+            if (
+                self.cic.atomArrayValid[self.cic.atomArrayIndex[ak]]
+                and respos == ak.akl[spNdx]
+                and ((icode == " " and ak.akl[icNdx] is None) or icode == ak.akl[icNdx])
             ):
 
                 ac = self.atom_coords[ak]
