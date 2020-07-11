@@ -543,7 +543,7 @@ class IC_Chain:
         -> build chain arrays from IC data, also empty atomArray
 
         If called at start of atom_to_internal_coords, self.di/hedra fully
-        populated.  -> create empty chain np arrays
+        populated.  -> create empty chain numpy arrays
 
         In both cases, fix di/hedra object attributes to be views on
         chain-level array data
@@ -771,6 +771,7 @@ class IC_Chain:
 
         # rtm:BpAtmVw
         # set all ric.atom_coords to be views on chain atomArray
+        # also done at end of IC_Chain.write_SCAD()
         for ric in self.ordered_aa_ic_list:
             for ak in ric.ak_set:
                 ric.atom_coords[ak] = self.atomArray[self.atomArrayIndex[ak]]
@@ -832,6 +833,20 @@ class IC_Chain:
 
         for ric in self.ordered_aa_ic_list:
             ric.atom_to_internal_coordinates(verbose=verbose)  # builds di/hedra objects
+
+        # if added Gly C-betas when building di/hedra residue objects, now need
+        # to add additional atoms to the chain level numpy arrays
+        if IC_Residue.gly_Cbeta and hasattr(self, "gcb"):
+            gcbaa = np.array(tuple(self.gcb.values()))
+            siz = len(self.gcb)
+            start = len(self.atomArray)
+            gcbaaNdx = dict(zip(self.gcb.keys(), range(start, start + siz)))
+            gcbaaValid = np.zeros(siz, dtype=bool)
+
+            self.atomArray = np.append(self.atomArray, gcbaa, axis=0)
+            self.atomArrayValid = np.append(self.atomArrayValid, gcbaaValid, axis=0)
+            self.atomArrayIndex.update(gcbaaNdx)
+            delattr(self, "gcb")
 
         self.init_edra()
 
@@ -1074,9 +1089,16 @@ class IC_Chain:
                 + " backbone\n"
             )
             ndx += 1
+
             # assemble with no start position, return transform matrices
             ric.clear_transforms()
-            ric.assemble(resetLocation=True)
+
+            # update residue atom coords for no start position
+            # this makes ric.atom_coords new copy, not view of chain atomArray
+            ric.atom_coords = cast(
+                Dict[AtomKey, np.array], ric.assemble(resetLocation=True)
+            )
+
             ndx2 = 0
             started = False
             for i in range(1 if backboneOnly else 2):
@@ -1243,6 +1265,13 @@ class IC_Chain:
                 IC_Chain._write_mtx(fp, mtr)
                 fp.write(" ]")
         fp.write("\n   ]\n")
+
+        # make residue atom_coords consistent with chain atomArray again
+        # copy from IC_Chain.init_atom_coords()
+        # set all ric.atom_coords to be views on chain atomArray
+        for ric in self.ordered_aa_ic_list:
+            for ak in ric.ak_set:
+                ric.atom_coords[ak] = self.atomArray[self.atomArrayIndex[ak]]
 
 
 class IC_Residue(object):
@@ -2202,6 +2231,12 @@ class IC_Residue(object):
             d.set_hedra()
 
             self.link_dihedra(verbose)  # re-run for new dihedra
+
+            # prepare to add new Gly CB atom(s)
+            # in IC_Chain.atom_to_internal_coordinates()
+            if not hasattr(self.cic, "gcb"):
+                self.cic.gcb: Dict[AtomKey, np.array] = {}
+            self.cic.gcb[sCB] = np.array((0, 0, 0, 1), dtype=np.float64)
 
         if verbose:
             # oAtom =
