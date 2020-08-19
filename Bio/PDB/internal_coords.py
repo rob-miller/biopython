@@ -71,7 +71,7 @@ except ImportError:
     from Bio import MissingPythonDependencyError
 
     raise MissingPythonDependencyError(
-        "Install np to build proteins from internal coordinates."
+        "Install numpy to build proteins from internal coordinates."
     )
 
 from Bio.PDB.Atom import Atom, DisorderedAtom
@@ -137,20 +137,20 @@ class IC_Chain:
 
     hedraLen: int length of hedra dict
 
-    hedraNdx: dict mapping hedra AtomKeys to np array data
+    hedraNdx: dict mapping hedra AtomKeys to numpy array data
 
     dihedra: dict indexed by 4-tuples of AtomKeys
         Dihedra forming (overlapping) this residue
 
     dihedraLen: int length of dihedra dict
 
-    dihedraNdx: dict mapping dihedra AtomKeys to np array data
+    dihedraNdx: dict mapping dihedra AtomKeys to numpy array data
 
-    atomArray: np array of homogeneous atom coords for chain
+    atomArray: numpy array of homogeneous atom coords for chain
 
     atomArrayIndex: dict mapping AtomKeys to atomArray indexes
 
-    np arrays for vector processing of chain di/hedra:
+    numpy arrays for vector processing of chain di/hedra:
 
     hedraIC: length-angle-length entries for each hedron
 
@@ -509,7 +509,7 @@ class IC_Chain:
 
         IC atom_coords are homogeneous [4], Biopython atom coords are XYZ [3].
         """
-        # rtm TODO: improve with np views on biopython Atom np array?
+        # rtm TODO: improve with numpy views on biopython Atom numpy array?
         # rtm:BpAtmVw
 
         # rounding here is faster than in assemble_residues, but get drift
@@ -733,7 +733,7 @@ class IC_Chain:
         self.a4_pre_rotation[mdRev] = self.hAtoms[self.dH2ndx, 0][mdRev]
         self.a4_pre_rotation[mdFwd] = self.hAtomsR[self.dH2ndx, 2][mdFwd]
 
-        # np multiply, add operations below intermediate array but out= not
+        # numpy multiply, add operations below intermediate array but out= not
         # working with masking:
         self.a4_pre_rotation[:, 2][self.dAtoms_needs_update] = np.multiply(
             self.a4_pre_rotation[:, 2][self.dAtoms_needs_update], -1
@@ -1288,12 +1288,12 @@ class IC_Residue(object):
     rprev, rnext: lists of IC_Residue objects
         References to adjacent (bonded, not missing, possibly disordered)
         residues in chain
-    atom_coords: AtomKey indexed dict of np [4] arrays
+    atom_coords: AtomKey indexed dict of numpy [4] arrays
         Local copy of atom homogeneous coordinates [4] for work
         Actually a view into IC_Chain's atomArray
         distinct from Bopython Residue/Atom values
-    atom_coords_vw: AtomKey indexed dict of np [3] arrays
-        np view into Biopython Residue/Atom values
+    atom_coords_vw: AtomKey indexed dict of numpy [3] arrays
+        numpy view into Biopython Residue/Atom values
     alt_ids: list of char
         AltLoc IDs from PDB file
     bfactors: dict
@@ -1365,7 +1365,7 @@ class IC_Residue(object):
         Compute atom coordinates for this residue from internal coordinates
     atm241(coord)
         Convert 1x3 cartesian coords to 1x4 homogeneous coords
-        Naming: 4x1 array is correct, but np handles automatically
+        Naming: 4x1 array is correct, but numpy handles automatically
     coords_to_residue()
         Convert homogeneous atom_coords to Biopython cartesian Atom coords
     atom_to_internal_coordinates(verbose)
@@ -1427,7 +1427,7 @@ class IC_Residue(object):
         # reference to adjacent residues in chain
         self.rprev: List[IC_Residue] = []
         self.rnext: List[IC_Residue] = []
-        # local copy, homogeneous coordinates for atoms, np [4]
+        # local copy, homogeneous coordinates for atoms, numpy [4]
         # generated from dihedra include some i+1 atoms
         # or initialised here from parent residue if loaded from coordinates
         self.atom_coords: Dict["AtomKey", np.array] = {}  # homog coords
@@ -2967,14 +2967,14 @@ class Hedron(Edron):
 
     Attributes
     ----------
-    lal: np array of len12, angle, len23
+    lal: numpy array of len12, angle, len23
         len12 = distance between 1st and 2nd atom
         angle = angle (degrees) formed by 3 atoms
         len23 = distance between 2nd and 3rd atoms
 
-    atoms: 3x4 np arrray (view on chain array)
+    atoms: 3x4 numpy arrray (view on chain array)
         3 homogeneous atoms comprising hedron, 1st on XZ, 2nd at origin, 3rd on +Z
-    atomsR: 3x4 np array (view on chain array)
+    atomsR: 3x4 numpy array (view on chain array)
         atoms reversed, 1st on +Z, 2nd at origin, 3rd on XZ plane
 
     Methods
@@ -3043,7 +3043,7 @@ class Hedron(Edron):
     @angle.setter
     def angle(self, angle_deg) -> None:
         """Set this hedron angle; sets needs_update."""
-        self.lal[1] = angle_deg  # view on chain np arrays
+        self.lal[1] = angle_deg  # view on chain numpy arrays
         self._invalidate_atoms()
 
     @property
@@ -3118,17 +3118,17 @@ class Dihedron(Edron):
         Hash keys for hedron1 and hedron2
     id3,id32: tuples of AtomKeys
         First 3 and second 3 atoms comprising dihedron; hxkey orders may differ
-    initial_coords: tuple[4] of np arrays [4]
+    initial_coords: tuple[4] of numpy arrays [4]
         Local atom coords for 4 atoms, [0] on XZ plane, [1] at origin,
         [2] on +Z, [3] rotated by dihedral
-    a4_pre_rotation: np array [4]
+    a4_pre_rotation: numpy array [4]
         4th atom of dihedral aligned to XZ plane (angle not applied)
     ic_residue: IC_Residue object reference
         IC_Residue object containing this dihedral
     reverse: bool
         Indicates order of atoms in dihedron is reversed from order of atoms
         in hedra (configured by set_hedra())
-    cst, rcst: np array [4][4]
+    cst, rcst: numpy array [4][4]
         transforms to and from coordinate space defined by first hedron.
         set by IC_Residue.assemble().  defined by id3 order NOT h1key order
         (atoms may be reversed between these two).  View on IC_Chain
