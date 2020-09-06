@@ -406,14 +406,22 @@ class IC_Chain:
     # @profile
     def ar2(self) -> None:
         """Generate atom coords from internal coords, vectorised."""
-        a2da_map = self.a2da_map
-        a2d_map = self.a2d_map
-        d2a_map = self.d2a_map
-        atomArray = self.atomArray
-        atomArrayValid = self.atomArrayValid
-        dAtoms = self.dAtoms
+        # dihedron atom positions of chain atom ndxs, maps atomArray to dihedra
+        a2da_map = self.a2da_map  # 8468 x int
+        # each chain atom to list of [dihedron], [dihedron_position]
+        a2d_map = self.a2d_map  # 2000 x ([int], [int])
+        # every dihedron atom to chain atoms
+        d2a_map = self.d2a_map  # 2117 x [4] ints
+        # all chain atoms
+        atomArray = self.atomArray  # 2000
+        # bool markers for chain atoms with valid coordinates
+        atomArrayValid = self.atomArrayValid  # 2000
+        # complete array of dihedra atoms
+        dAtoms = self.dAtoms  # 2117 x [4][4] float
+        # coordinate space transforms for each dihedron
         dCoordSpace = self.dCoordSpace
-        dcsValid = self.dcsValid
+        # bool markers for valid coordinate space transforms
+        dcsValid = self.dcsValid  # 2117
 
         # dSet is 4-atom arrays for every dihedral, multiple copies of
         # many atoms as the dihedra overlap
@@ -430,29 +438,63 @@ class IC_Chain:
         # select the dihedrals ready for processing
         workSelector = (dSetValid == targ).all(axis=1)
 
+        loopCount = 0
         while np.any(workSelector):
+            # indexes of dihedra in dset to update
             workNdxs = np.where(workSelector)
+            # subset of dihedra to update
             workSet = dSet[workSelector]
+            # will update coordinates of 4th atom in each workSet dihedron
             updateMap = d2a_map[workNdxs, 3][0]
 
+            # get all coordSpace transforms
             cspace = multi_coord_space(workSet, np.sum(workSelector), True)
 
+            # coordspace expensive to compute so save
             dCoordSpace[workSelector] = np.swapaxes(cspace, 0, 1)
             dcsValid[workSelector] = True
 
+            # generate new coords for 4th atoms in workSet dihedra
             initCoords = dAtoms[workSelector].reshape(-1, 4, 4)
-
             atomArray[updateMap] = np.round(
                 np.einsum("ijk,ik->ij", cspace[1], initCoords[:, 3]), 3
-            )  # must round here or get coordinate drift along chain
+            )  # must round to PDB resolution here or get coordinate drift along chain
 
+            # mark new computed atom positions as valid
             atomArrayValid[updateMap] = True
 
+            dv2 = np.full_like(dcsValid, False, dtype=bool)
+            ws2 = np.full_like(dcsValid, False, dtype=bool)
+            dsv2 = np.full_like(dSetValid, False, dtype=bool)
+            # copy new atom positions into dihedra atom array
+            # atoms may map to multiple dihedrals so seems like this has to be
+            # list of lists processing, not array
             for a in updateMap:
                 dSet[a2d_map[a]] = atomArray[a]
-
+                lis = a2d_map[a]
+                for j in lis[0]:
+                    foo = d2a_map[j]
+                    bar = atomArrayValid[foo]
+                    if (bar == targ).all():
+                        ws2[j] = True
+                # dv2[a2d_map[a][0]] = True
+            dv2[workSelector] = False
+            dsv2 = 0
+            # SLOW - need to select out just parts that change
             dSetValid = atomArrayValid[a2da_map].reshape(-1, 4)
-            workSelector = (dSetValid == targ).all(axis=1)
+            # workSelector = (dSetValid == targ).all(axis=1)
+            (dSetValid == targ).all(axis=1, out=workSelector)
+
+            # dsv2 = (atomArrayValid[a2da_map])[dv2].reshape(-1, 4)
+
+            # if (workSelector == ws2).all():
+            #    print("foo")
+            # else:
+            #    print("bar")
+            workSelector = ws2
+            loopCount += 1
+
+        print("loopCount: ", loopCount)
 
         # ensure all transforms set - possible issue for OpenSCAD output with
         # altloc atoms
