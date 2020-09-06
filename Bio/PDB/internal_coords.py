@@ -463,35 +463,18 @@ class IC_Chain:
             # mark new computed atom positions as valid
             atomArrayValid[updateMap] = True
 
-            dv2 = np.full_like(dcsValid, False, dtype=bool)
-            ws2 = np.full_like(dcsValid, False, dtype=bool)
-            dsv2 = np.full_like(dSetValid, False, dtype=bool)
-            # copy new atom positions into dihedra atom array
+            workSelector[:] = False
             # atoms may map to multiple dihedrals so seems like this has to be
             # list of lists processing, not array
             for a in updateMap:
+                # copy new atom positions into dihedra atom array
                 dSet[a2d_map[a]] = atomArray[a]
-                lis = a2d_map[a]
-                for j in lis[0]:
-                    foo = d2a_map[j]
-                    bar = atomArrayValid[foo]
-                    if (bar == targ).all():
-                        ws2[j] = True
-                # dv2[a2d_map[a][0]] = True
-            dv2[workSelector] = False
-            dsv2 = 0
-            # SLOW - need to select out just parts that change
-            dSetValid = atomArrayValid[a2da_map].reshape(-1, 4)
-            # workSelector = (dSetValid == targ).all(axis=1)
-            (dSetValid == targ).all(axis=1, out=workSelector)
+                # build new workSelector from only updated dihedra
+                adlist = a2d_map[a]
+                for d in adlist[0]:
+                    dvalid = atomArrayValid[d2a_map[d]]
+                    workSelector[d] = (dvalid == targ).all()
 
-            # dsv2 = (atomArrayValid[a2da_map])[dv2].reshape(-1, 4)
-
-            # if (workSelector == ws2).all():
-            #    print("foo")
-            # else:
-            #    print("bar")
-            workSelector = ws2
             loopCount += 1
 
         print("loopCount: ", loopCount)
