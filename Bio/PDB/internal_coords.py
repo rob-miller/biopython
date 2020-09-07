@@ -404,7 +404,7 @@ class IC_Chain:
             ric.link_dihedra()
 
     # @profile
-    def ar2(self) -> None:
+    def ar2(self, verbose: bool = False) -> None:
         """Generate atom coords from internal coords, vectorised."""
         # dihedron atom positions of chain atom ndxs, maps atomArray to dihedra
         a2da_map = self.a2da_map  # 8468 x int
@@ -477,7 +477,14 @@ class IC_Chain:
 
             loopCount += 1
 
-        print("loopCount: ", loopCount)
+        if verbose:
+            print(
+                "chain",
+                self.chain.id,
+                "coordinates generated in",
+                loopCount,
+                "iterations",
+            )
 
         # ensure all transforms set - possible issue for OpenSCAD output with
         # altloc atoms
@@ -825,21 +832,21 @@ class IC_Chain:
                     print(f"no assembly for {ric} due to missing N, Ca and/or C atoms")
 
         self.init_atom_coords()
-        self.ar2()
+        if False:
+            self.ar2(verbose=verbose)
 
-        if verbose and not np.all(self.atomArrayValid):
-            dSetValid = self.atomArrayValid[self.a2da_map].reshape(-1, 4)
-            for ric in self.ordered_aa_ic_list:
+            if verbose and not np.all(self.atomArrayValid):
+                dSetValid = self.atomArrayValid[self.a2da_map].reshape(-1, 4)
+                for ric in self.ordered_aa_ic_list:
 
-                for k, d in ric.dihedra.items():
-                    if not dSetValid[d.ndx].all():
-                        print(
-                            f"missing coordinates for chain {ric.cic.chain.id} {ric.pretty_str()} dihedral: {d.id}"
-                        )
+                    for k, d in ric.dihedra.items():
+                        if not dSetValid[d.ndx].all():
+                            print(
+                                f"missing coordinates for chain {ric.cic.chain.id} {ric.pretty_str()} dihedral: {d.id}"
+                            )
+        else:
+            self.assemble_residues(verbose=verbose)  # internal to XYZ coordinates
 
-        # self.assemble_residues(
-        #    verbose=verbose, start=start, fin=fin
-        # )  # internal to XYZ coordinates
         if promote:
             self.coords_to_structure()  # promote to BioPython Residue/Atom
 
@@ -1882,6 +1889,10 @@ class IC_Residue:
         # debug statements below still useful, commented for performance
         # dbg = False
 
+        dcsValid = self.cic.dcsValid
+        aaValid = self.cic.atomArrayValid
+        aaNdx = self.cic.atomArrayIndex
+
         NCaCKey = sorted(self.NCaCKey)
 
         if not self.ak_set:
@@ -1899,6 +1910,10 @@ class IC_Residue:
             )
 
         startLst.extend(NCaCKey)
+
+        for akl in startLst:
+            for ak in akl:
+                aaValid[aaNdx[ak]] = True
 
         q = deque(startLst)
         # resnum = self.rbase[0]
@@ -1935,26 +1950,26 @@ class IC_Residue:
 
                         acount = len([a for a in d.aks if a in atomCoords])
 
-                        if 4 == acount:  # and not need_transform:
+                        if 4 == acount:
                             # dihedron already done, queue 2nd hedron key
                             q.appendleft(d_h2key)
                             # if dbg:
                             #    print("    4- already done, append left")
-                            if not d.cic.dcsValid[d.ndx]:  # missing transform
+                            if not dcsValid[d.ndx]:  # missing transform
                                 # can happen for altloc atoms
                                 # only needed for write_SCAD output
                                 acs = [atomCoords[a] for a in h1k]
                                 d.cst, d.rcst = coord_space(
                                     acs[0], acs[1], acs[2], True
                                 )
-                                d.cic.dcsValid[d.ndx] = True
+                                dcsValid[d.ndx] = True
                         elif 3 == acount:
                             # if dbg:
                             #    print("    3- call coord_space")
 
                             acs = [atomCoords[a] for a in h1k]
                             d.cst, d.rcst = coord_space(acs[0], acs[1], acs[2], True)
-                            d.cic.dcsValid[d.ndx] = True
+                            dcsValid[d.ndx] = True
                             # print(d.cst)
                             # print(d.rcst)
                             # if dbg:
@@ -1968,7 +1983,9 @@ class IC_Residue:
 
                             atomCoords[akl[3]] = np.round(
                                 acak3, 3
-                            )  # round to PDB format 8.3 # rtm:fix
+                            )  # round to PDB format 8.3
+                            aaValid[aaNdx[akl[3]]] = True
+
                             # if dbg:
                             #    print(
                             #        "        3- finished, ak:",
