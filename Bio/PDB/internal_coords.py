@@ -129,6 +129,11 @@ class IC_Chain:
         for 3D printing (OpenSCAD output) a structure with fully disordered
         (missing) residues.
 
+    ParallelAssembleResidues: **Class** attribute affecting internal_to_atom_coords.
+        The overhead for processing long (1200 residue) chains can outweigh the
+        improvement of calculating dihedra in parallel where possible, so clearing
+        flag (set to False) will switch to the serial algorithm
+
     ordered_aa_ic_list: list of IC_Residue objects
         IC_Residue objects ic algorithms can process (e.g. no waters)
 
@@ -195,6 +200,8 @@ class IC_Chain:
     """
 
     MaxPeptideBond = 1.4  # larger C-N distance than this is chain break
+    ParallelAssembleResidues = True  # parallel internal_to_atom, slow for long chains
+
     # for assemble_residues
     dihedraSelect = np.array([True, True, True, False])
     dihedraOK = np.array([True, True, True, True])
@@ -405,7 +412,14 @@ class IC_Chain:
 
     # @profile
     def ar2(self, verbose: bool = False) -> None:
-        """Generate atom coords from internal coords, vectorised."""
+        """Generate atom coords from internal coords, vectorised.
+
+        Does not update dCoordSpace as assemble _residues() does - call
+        update_dCoordSpace() if needed
+
+        :param verbose bool: default False
+            report number of iterations to compute changed dihedra
+        """
         # dihedron atom positions of chain atom ndxs, maps atomArray to dihedra
         a2da_map = self.a2da_map  # 8468 x int
         # each chain atom to list of [dihedron], [dihedron_position]
@@ -418,10 +432,6 @@ class IC_Chain:
         atomArrayValid = self.atomArrayValid  # 2000
         # complete array of dihedra atoms
         dAtoms = self.dAtoms  # 2117 x [4][4] float
-        # coordinate space transforms for each dihedron
-        dCoordSpace = self.dCoordSpace
-        # bool markers for valid coordinate space transforms
-        dcsValid = self.dcsValid  # 2117
 
         # dSet is 4-atom arrays for every dihedral, multiple copies of
         # many atoms as the dihedra overlap
@@ -431,7 +441,10 @@ class IC_Chain:
 
         # clear any transforms for dihedrals with outdated atoms
         workSelector = (dSetValid == self.dihedraOK).all(axis=1)
-        dcsValid[~workSelector] = False
+        self.dcsValid[np.logical_not(workSelector)] = False
+
+        if verbose:
+            dihedraWrk = workSelector.size - workSelector.sum()
 
         # mask for dihedral with 3 valid atoms in dSet, ready to be processed:
         targ = IC_Chain.dihedraSelect
@@ -449,10 +462,6 @@ class IC_Chain:
 
             # get all coordSpace transforms
             cspace = multi_coord_space(workSet, np.sum(workSelector), True)
-
-            # coordspace expensive to compute so save
-            dCoordSpace[workSelector] = np.swapaxes(cspace, 0, 1)
-            dcsValid[workSelector] = True
 
             # generate new coords for 4th atoms in workSet dihedra
             initCoords = dAtoms[workSelector].reshape(-1, 4, 4)
@@ -478,23 +487,10 @@ class IC_Chain:
             loopCount += 1
 
         if verbose:
+            cid = self.chain.full_id
             print(
-                "chain",
-                self.chain.id,
-                "coordinates generated in",
-                loopCount,
-                "iterations",
+                f"{cid[0]} {cid[2]} coordinates for {dihedraWrk} dihedra updated in {loopCount} iterations"
             )
-
-        # ensure all transforms set - possible issue for OpenSCAD output with
-        # altloc atoms
-
-        if not dcsValid.all():
-            workSelector = ~dcsValid
-            workSet = dSet[workSelector]
-            cspace = multi_coord_space(workSet, np.sum(workSelector), True)
-            dCoordSpace[workSelector] = np.swapaxes(cspace, 0, 1)
-            dcsValid[workSelector] = True
 
     def assemble_residues(
         self,
@@ -808,12 +804,29 @@ class IC_Chain:
             for ak in ric.ak_set:
                 ric.atom_coords[ak] = self.atomArray[self.atomArrayIndex[ak]]
 
+    def update_dCoordSpace(self, workSelector: Optional[np.ndarray] = None) -> None:
+        """Compute/update multiple coordinate space transforms for chain dihedra.
+
+        Requires all atoms updated so calls ar2().
+
+        :param workSelector numpy bool array: default None = update as needed
+            mask to select dihedra for update
+        """
+        if workSelector is None:
+            self.ar2()  # ensure atoms updated, fast if nothing to do
+            workSelector = np.logical_not(self.dcsValid)
+        workSet = self.dSet[workSelector]
+        cspace = multi_coord_space(workSet, np.sum(workSelector), True)
+        self.dCoordSpace[workSelector] = np.swapaxes(cspace, 0, 1)
+        self.dcsValid[workSelector] = True
+
+    # @profile
     def internal_to_atom_coordinates(
         self, verbose: bool = False, promote: Optional[bool] = True,
     ) -> None:
-        """Process, IC data to Residue/Atom coords.
+        """Process IC data to Residue/Atom coords.
 
-        Not yet vectorized.
+        Not yet vectorized.  rtm
 
         :param verbose bool: default False
             describe runtime problems
@@ -832,7 +845,7 @@ class IC_Chain:
                     print(f"no assembly for {ric} due to missing N, Ca and/or C atoms")
 
         self.init_atom_coords()
-        if False:
+        if IC_Chain.ParallelAssembleResidues:
             self.ar2(verbose=verbose)
 
             if verbose and not np.all(self.atomArrayValid):
@@ -1944,9 +1957,9 @@ class IC_Residue:
                         # skip incomplete dihedron if don't have 4th atom due
                         # to missing input data
                         d_h2key = d.hedron2.aks
-                        akl = d.aks
+                        ak = d.aks[3]
                         # if dbg:
-                        #    print("    process", d, d_h2key, akl)
+                        #    print("    process", d, d_h2key, d.aks)
 
                         acount = len([a for a in d.aks if a in atomCoords])
 
@@ -1981,10 +1994,10 @@ class IC_Residue:
                             # if dbg:
                             #    print("        acak3=", acak3.transpose())
 
-                            atomCoords[akl[3]] = np.round(
+                            atomCoords[ak] = np.round(
                                 acak3, 3
                             )  # round to PDB format 8.3
-                            aaValid[aaNdx[akl[3]]] = True
+                            aaValid[aaNdx[ak]] = True
 
                             # if dbg:
                             #    print(
@@ -3544,16 +3557,11 @@ class AtomKey:
         else:
             return NotImplemented
 
+    # @profile
     def _cmp(self, other: "AtomKey") -> Tuple[int, int]:
         """Comparison function ranking self vs. other."""
-        akl_s = self.akl
-        akl_o = other.akl
-        atmNdx = AtomKey.fields.atm
-        occNdx = AtomKey.fields.occ
-        rsNdx = AtomKey.fields.respos
-        # rsnNdx = AtomKey.fields.resname
         for i in range(6):
-            s, o = akl_s[i], akl_o[i]
+            s, o = self.akl[i], other.akl[i]
             if s != o:
                 # insert_code, altloc can be None, deal with first
                 if s is None and o is not None:
@@ -3562,17 +3570,17 @@ class AtomKey:
                 elif o is None and s is not None:
                     return 1, 0
                 # now we know s, o not None
-                s, o = cast(str, s), cast(str, o)
+                # s, o = cast(str, s), cast(str, o)  # performance critical code
 
-                if atmNdx != i:
+                if AtomKey.fields.atm != i:
                     # only sorting complications at atom level, occ.
                     # otherwise respos, insertion code will trigger
                     # before residue name
-                    if occNdx == i:
+                    if AtomKey.fields.occ == i:
                         oi = int(float(s) * 100)
                         si = int(float(o) * 100)
                         return si, oi  # swap so higher occupancy comes first
-                    elif rsNdx == i:
+                    elif AtomKey.fields.respos == i:
                         return int(s), int(o)
                     else:  # resname or altloc
                         return ord(s), ord(o)
