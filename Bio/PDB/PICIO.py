@@ -21,13 +21,17 @@ from Bio.File import as_handle
 from Bio.PDB.StructureBuilder import StructureBuilder
 from Bio.PDB.parse_pdb_header import _parse_pdb_header_list
 from Bio.PDB.PDBExceptions import PDBException
+from Bio.PDB.Polypeptide import three_to_one
 
 from Bio.PDB.internal_coords import IC_Residue, IC_Chain, Edron, AtomKey
 
-from typing import Dict, TextIO
+from typing import Dict, TextIO, Set
 from Bio.PDB.Structure import Structure
+from Bio.PDB.Chain import Chain
+from Bio.PDB.Residue import Residue
 
 
+# @profile
 def read_PIC(file: TextIO, verbose: bool = False) -> Structure:
     """Load Protein Internal Coordinate (.pic) data from file.
 
@@ -113,6 +117,34 @@ def read_PIC(file: TextIO, verbose: bool = False) -> Structure:
     ]
 
     sb_res = None
+    rkl = None
+    sb_chain = None
+    sbcic = None
+
+    old = False
+
+    akc = {}
+    hl12 = {}
+    ha = {}
+    hl23 = {}
+    da = {}
+    bfacs = {}
+
+    orphan_aks = set()  # []
+
+    def akcache(akstr: str) -> AtomKey:
+        try:
+            return akc[akstr]
+        except (KeyError):
+            ak = akc[akstr] = AtomKey(akstr)
+            return ak
+
+    def ak_resmatch(ak, res):
+        return (
+            int(ak.akl[0]) == res.id[1]
+            and ((ak.akl[1] is None and res.id[2] == " ") or (ak.akl[1] == res.id[2]))
+            and ak.akl[2] == three_to_one(res.resname)
+        )
 
     with as_handle(file, mode="r") as handle:
         for aline in handle.readlines():
@@ -142,17 +174,30 @@ def read_PIC(file: TextIO, verbose: bool = False) -> Structure:
                         segid = "    "
                     this_SMCS = [m.group(1), int(m.group(2)), m.group(3), segid]
                     if curr_SMCS != this_SMCS:
-                        # init new SMCS level as needed
+                        if not old and curr_SMCS[:3] != this_SMCS[:3] and ha != {}:
+                            # chain change so process current chain data
+                            sbcic.hedraDict2chain(akc, hl12, ha, hl23, da, bfacs)
+                            akc = {}
+                            hl12 = {}
+                            ha = {}
+                            hl23 = {}
+                            da = {}
+                            bfacs = {}
+                        # init new Biopython SMCS level as needed
                         for i in range(4):
                             if curr_SMCS[i] != this_SMCS[i]:
                                 SMCS_init[i](this_SMCS[i])
                                 curr_SMCS[i] = this_SMCS[i]
-                                if 0 == i:
+                                if i == 0:
                                     # 0 = init structure so add header
                                     struct_builder.set_header(header_dict)
-                                elif 1 == i:
+                                elif i == 1:
                                     # new model means new chain and new segid
                                     curr_SMCS[2] = curr_SMCS[3] = None
+                                elif not old and i == 2:
+                                    # new chain so init internal_coord
+                                    sb_chain = struct_builder.chain
+                                    sbcic = sb_chain.internal_coord = IC_Chain(sb_chain)
 
                     struct_builder.init_residue(
                         m.group("res"),
@@ -168,6 +213,26 @@ def read_PIC(file: TextIO, verbose: bool = False) -> Structure:
                                 sb_res = r
                                 break
                     sb_res.internal_coord = IC_Residue(sb_res)
+                    try:
+                        rkl = (
+                            str(sb_res.id[1]),
+                            (None if sb_res.id[2] == " " else sb_res.id[2]),
+                            three_to_one(sb_res.resname),
+                        )
+                    except KeyError:  # hetatms fail three_to_one
+                        if sb_res.resname in IC_Residue.accept_resnames:
+                            rkl = (
+                                str(sb_res.id[1]),
+                                (None if sb_res.id[2] == " " else sb_res.id[2]),
+                                sb_res.resname,
+                            )
+
+                    # update AtomKeys w/o IC_Residue references, in case
+                    # chain ends before di/hedra sees them (2XHE test case)
+                    for ak in orphan_aks:
+                        if ak.akl[0:3] == rkl:
+                            ak.icr = sb_res.internal_coord
+                    orphan_aks = set(filter(lambda ak: ak.icr is None, orphan_aks))
                     # print('res id:', m.groupdict())
                     # print(report_IC(struct_builder.get_structure()))
                 else:
@@ -227,15 +292,44 @@ def read_PIC(file: TextIO, verbose: bool = False) -> Structure:
                     for bfac_pair in m.groups():
                         if bfac_pair is not None:
                             m2 = bfac2_re.match(bfac_pair)
-                            if m2 and sb_res is not None and sb_res.internal_coord:
+                            if (
+                                old
+                                and m2
+                                and sb_res is not None
+                                and sb_res.internal_coord
+                            ):
                                 rp = sb_res.internal_coord
                                 rp.bfactors[m2.group(1)] = float(m2.group(2))
+                            else:
+                                bfacs[m2.group(1)] = float(m2.group(2))
                 # else:
                 #    print('Reading pic file', file, 'B-factor line fail: ', aline)
             else:
                 m = Edron.edron_re.match(aline)
                 if m and sb_res is not None:
-                    sb_res.internal_coord.load_PIC(m.groupdict())
+                    if old:
+                        sb_res.internal_coord.load_PIC(m.groupdict())
+                    else:
+                        if m["a4"] is None:
+                            ek = (akcache(m["a1"]), akcache(m["a2"]), akcache(m["a3"]))
+                            hl12[ek] = float(m["len12"])
+                            ha[ek] = float(m["angle"])
+                            hl23[ek] = float(m["len23"])
+                        else:
+                            ek = (
+                                akcache(m["a1"]),
+                                akcache(m["a2"]),
+                                akcache(m["a3"]),
+                                akcache(m["a4"]),
+                            )
+                            da[ek] = float(m["dihedral"])
+                        for ak in ek:
+                            if ak.icr is None:
+                                if ak.akl[0:3] == rkl:
+                                    ak.icr = sb_res.internal_coord
+                                else:
+                                    orphan_aks.add(ak)
+
                 elif m:
                     print(
                         "PIC file: ",
@@ -249,15 +343,20 @@ def read_PIC(file: TextIO, verbose: bool = False) -> Structure:
                         print("Reading PIC file", file, "parse fail on: .", aline, ".")
                     return None
 
-    struct = struct_builder.get_structure()
-    for chn in struct.get_chains():
-        chnp = chn.internal_coord = IC_Chain(chn)
-        # done in IC_Chain init : chnp.set_residues()
-        chnp.link_residues()
-        chnp.init_edra()
+    if old:
+        struct = struct_builder.get_structure()
+        for chn in struct.get_chains():
+            chnp = chn.internal_coord = IC_Chain(chn)
+            # done in IC_Chain init : chnp.set_residues()
+            chnp.link_residues()
+            chnp.init_edra()
+    else:
+        if ha != {}:
+            # reached end so process current chain data
+            sbcic.hedraDict2chain(akc, hl12, ha, hl23, da, bfacs)
 
     # print(report_PIC(struct_builder.get_structure()))
-    return struct
+    return struct_builder.get_structure()
 
 
 def _wpr(entity, fp, pdbid, chainid):
