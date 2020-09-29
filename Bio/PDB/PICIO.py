@@ -23,7 +23,14 @@ from Bio.PDB.parse_pdb_header import _parse_pdb_header_list
 from Bio.PDB.PDBExceptions import PDBException
 from Bio.PDB.Polypeptide import three_to_one
 
-from Bio.PDB.internal_coords import IC_Residue, IC_Chain, Edron, AtomKey
+from Bio.PDB.internal_coords import (
+    IC_Residue,
+    IC_Chain,
+    Edron,
+    Hedron,
+    Dihedron,
+    AtomKey,
+)
 
 from typing import Dict, TextIO, Set
 from Bio.PDB.Structure import Structure
@@ -133,6 +140,7 @@ def read_PIC(file: TextIO, verbose: bool = False) -> Structure:
     orphan_aks = set()  # []
 
     def akcache(akstr: str) -> AtomKey:
+        # akstr: full AtomKey string read from .pic file - includes residue info
         try:
             return akc[akstr]
         except (KeyError):
@@ -176,7 +184,7 @@ def read_PIC(file: TextIO, verbose: bool = False) -> Structure:
                     if curr_SMCS != this_SMCS:
                         if not old and curr_SMCS[:3] != this_SMCS[:3] and ha != {}:
                             # chain change so process current chain data
-                            sbcic.hedraDict2chain(akc, hl12, ha, hl23, da, bfacs)
+                            sbcic.hedraDict2chain(hl12, ha, hl23, da, bfacs)
                             akc = {}
                             hl12 = {}
                             ha = {}
@@ -212,27 +220,25 @@ def read_PIC(file: TextIO, verbose: bool = False) -> Structure:
                             if not r.internal_coord:
                                 sb_res = r
                                 break
-                    sb_res.internal_coord = IC_Residue(sb_res)
-                    try:
-                        rkl = (
-                            str(sb_res.id[1]),
-                            (None if sb_res.id[2] == " " else sb_res.id[2]),
-                            three_to_one(sb_res.resname),
-                        )
-                    except KeyError:  # hetatms fail three_to_one
-                        if sb_res.resname in IC_Residue.accept_resnames:
-                            rkl = (
-                                str(sb_res.id[1]),
-                                (None if sb_res.id[2] == " " else sb_res.id[2]),
-                                sb_res.resname,
-                            )
+                    sbric = sb_res.internal_coord = IC_Residue(
+                        sb_res
+                    )  # no atoms so no rak
+                    sbric.cic = sbcic
+                    rkl = (
+                        str(sb_res.id[1]),
+                        (None if sb_res.id[2] == " " else sb_res.id[2]),
+                        sbric.lc,
+                    )
 
                     # update AtomKeys w/o IC_Residue references, in case
                     # chain ends before di/hedra sees them (2XHE test case)
                     for ak in orphan_aks:
                         if ak.akl[0:3] == rkl:
-                            ak.icr = sb_res.internal_coord
-                    orphan_aks = set(filter(lambda ak: ak.icr is None, orphan_aks))
+                            ak.ric = sbric
+                            sbric.ak_set.add(ak)
+                            # rtm ?? need altoc support here
+                            # rtm ?? sbcic.akc[(sb_res.internal_coord, ak[3])]
+                    orphan_aks = set(filter(lambda ak: ak.ric is None, orphan_aks))
                     # print('res id:', m.groupdict())
                     # print(report_IC(struct_builder.get_structure()))
                 else:
@@ -315,6 +321,7 @@ def read_PIC(file: TextIO, verbose: bool = False) -> Structure:
                             hl12[ek] = float(m["len12"])
                             ha[ek] = float(m["angle"])
                             hl23[ek] = float(m["len23"])
+                            sbcic.hedra[ek] = sbric.hedra[ek] = Hedron(ek)
                         else:
                             ek = (
                                 akcache(m["a1"]),
@@ -323,10 +330,12 @@ def read_PIC(file: TextIO, verbose: bool = False) -> Structure:
                                 akcache(m["a4"]),
                             )
                             da[ek] = float(m["dihedral"])
+                            sbcic.dihedra[ek] = sbric.dihedra[ek] = Dihedron(ek)
                         for ak in ek:
-                            if ak.icr is None:
+                            if ak.ric is None:
                                 if ak.akl[0:3] == rkl:
-                                    ak.icr = sb_res.internal_coord
+                                    ak.ric = sbric
+                                    sbric.ak_set.add(ak)
                                 else:
                                     orphan_aks.add(ak)
 
@@ -353,7 +362,7 @@ def read_PIC(file: TextIO, verbose: bool = False) -> Structure:
     else:
         if ha != {}:
             # reached end so process current chain data
-            sbcic.hedraDict2chain(akc, hl12, ha, hl23, da, bfacs)
+            sbcic.hedraDict2chain(hl12, ha, hl23, da, bfacs)
 
     # print(report_PIC(struct_builder.get_structure()))
     return struct_builder.get_structure()
