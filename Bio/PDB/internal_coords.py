@@ -95,6 +95,7 @@ from typing import (
     cast,
     TYPE_CHECKING,
     Optional,
+    ByteString,
 )
 
 if TYPE_CHECKING:
@@ -170,11 +171,11 @@ class IC_Chain:
 
     hAtoms_needs_update: booleans indicating whether hAtoms represent hedraL12/A/L23
 
-    dihedraIC: dihedral angles for each dihedron
+    dihedraAngle: dihedral angles for each dihedron
 
     dAtoms: homogeneous atom coordinates (4x4) of dihedra, second atom at origin
 
-    dAtoms_needs_update: booleans indicating whether dAtoms represent dihedraIC
+    dAtoms_needs_update: booleans indicating whether dAtoms represent dihedraAngle
 
     dCoordSpace: forward and reverse transform matrices standardising positions
         of first hedron
@@ -227,23 +228,30 @@ class IC_Chain:
         # self.hedraNdx = {}
         self.dihedra = {}
         # self.dihedraNdx = {}
+
+        # cache of AtomKey results for cak()
+        # self.akc: Dict[Tuple(IC_Residue, str), AtomKey] = {}
+
         self.atomArray: np.array
         self.atomArrayIndex: Dict["AtomKey", int] = {}
+
         self.set_residues(verbose)  # no effect if no residues loaded
 
     # return True if a0, a1 within supplied cutoff
     def _atm_dist_chk(self, a0: Atom, a1: Atom, cutoff: float, sqCutoff: float) -> bool:
-        diff = a0.coord - a1.coord
-        sum = 0
-        for axis in diff:
-            if axis > cutoff:
-                # print("axis: ", axis)
-                return False
-            sum += axis * axis
-        if sum > sqCutoff:
-            # print("sq axis: ", sqrt(sum))  # need import math.sqrt
-            return False
-        return True
+        return sqCutoff > np.sum(np.square(a0.coord - a1.coord))
+        # rtm
+        # diff = a0.coord - a1.coord
+        # sum = 0
+        # for axis in diff:
+        #    if axis > cutoff:
+        #        # print("axis: ", axis)
+        #        return False
+        #    sum += axis * axis
+        # if sum > sqCutoff:
+        #    # print("sq axis: ", sqrt(sum))  # need import math.sqrt
+        #    return False
+        # return True
 
     # return a string describing issue, or None if OK
     def _peptide_check(self, prev: "Residue", curr: "Residue") -> Optional[str]:
@@ -256,8 +264,8 @@ class IC_Chain:
             return "PIC data missing atoms"
 
         # handle non-standard AA not marked as HETATM (1KQF, 1NTH)
-        if not prev.internal_coord.is20AA:
-            return "previous residue not standard amino acid"
+        if not prev.internal_coord.isAccept:
+            return "previous residue not standard/accepted amino acid"
 
         # both biopython Residues have Atoms, so check distance
         Natom = curr.child_dict.get("N", None)
@@ -271,7 +279,6 @@ class IC_Chain:
         if pNatom is None or pCAatom is None:
             return "previous residue missing N or Ca"
 
-        tooFar = f"MaxPeptideBond ({IC_Chain.MaxPeptideBond} angstroms) exceeded"
         if not Natom.is_disordered() and not pCatom.is_disordered():
             dc = self._atm_dist_chk(
                 Natom, pCatom, IC_Chain.MaxPeptideBond, self.sqMaxPeptideBond
@@ -279,7 +286,9 @@ class IC_Chain:
             if dc:
                 return None
             else:
-                return tooFar
+                return f"MaxPeptideBond ({IC_Chain.MaxPeptideBond} angstroms) exceeded"
+
+        # drop through for else Natom or pCatom is disordered:
 
         Nlist: List[Atom] = []
         pClist: List[Atom] = []
@@ -298,7 +307,7 @@ class IC_Chain:
                     Natom, pCatom, IC_Chain.MaxPeptideBond, self.sqMaxPeptideBond
                 ):
                     return None
-        return tooFar
+        return f"MaxPeptideBond ({IC_Chain.MaxPeptideBond} angstroms) exceeded"
 
     def clear_ic(self):
         """Clear residue internal_coord settings for this chain."""
@@ -308,7 +317,13 @@ class IC_Chain:
     def _add_residue(
         self, res: "Residue", last_res: List, last_ord_res: List, verbose: bool = False
     ) -> bool:
-        """Set rprev, rnext, determine chain break."""
+        """Set rprev, rnext, manage chain break.
+
+        Returns True for no chain break or residue has sufficient data to restart
+        at this position after a chain break (sets initNCaC coordinates in this
+        case).  False return means insufficient data to extend chain with this
+        residue.
+        """
         if not res.internal_coord:
             res.internal_coord = IC_Residue(res)
             res.internal_coord.cic = self
@@ -326,7 +341,7 @@ class IC_Chain:
             # chain break, save coords for restart
             if verbose and len(last_res) != 0:  # not first residue
                 if last_ord_res != last_res:
-                    reason = "disordered residues after {last_ord_res.pretty_str()}"
+                    reason = f"disordered residues after {last_ord_res.pretty_str()}"
                 else:
                     reason = cast(
                         str, self._peptide_check(last_ord_res[0].residue, res)
@@ -350,7 +365,7 @@ class IC_Chain:
         elif (
             0 == len(res.child_list)
             and self.chain.child_list[0].id == res.id
-            and res.internal_coord.is20AA
+            and (res.internal_coord.isAccept)
         ):
             # this is first residue, no atoms at all, is std amino acid
             # conclude reading pic file with no N-Ca-C coords
@@ -371,7 +386,8 @@ class IC_Chain:
         last_res: List["IC_Residue"] = []
         last_ord_res: List["IC_Residue"] = []
 
-        atomCoordDict = {}
+        # atomCoordDict = {}
+        akset = set()
         for res in self.chain.get_residues():
             # select only not hetero or accepted hetero
             if res.id[0] == " " or res.id[0] in IC_Residue.accept_resnames:
@@ -381,30 +397,40 @@ class IC_Chain:
                     for r in res.child_dict.values():
                         if self._add_residue(r, last_res, last_ord_res, verbose):
                             this_res.append(r.internal_coord)
+                            akset.update(r.internal_coord.ak_set)
                 else:
                     if self._add_residue(res, last_res, last_ord_res, verbose):
                         this_res.append(res.internal_coord)
+                        akset.update(res.internal_coord.ak_set)
 
                 if 0 < len(this_res):
                     self.ordered_aa_ic_list.extend(this_res)
                     last_ord_res = this_res
-                    for ric in this_res:
-                        atomCoordDict.update(ric.atom_coords_vw)
+                    # for ric in this_res:  # rtm think not needed after vectorise:
+                    #    atomCoordDict.update(ric.atom_coords_vw)
 
                 last_res = this_res
 
-        if atomCoordDict != {}:
-            aa = np.array(tuple(atomCoordDict.values()))
-            self.atomArray = np.insert(aa, 3, 1, axis=1)  # make homogeneous
-            # self.atomVwArray = aa  # rtm:BpAtmVw
-            siz = len(atomCoordDict)
-            self.atomArrayIndex = dict(zip(atomCoordDict.keys(), range(siz)))
-            self.atomArrayValid = np.ones(siz, dtype=bool)
+        self.akset = akset
 
-            # set all ric.atom_coords to be views on chain atomArray
-            for ric in self.ordered_aa_ic_list:
-                for ak in ric.atom_coords_vw.keys():
-                    ric.atom_coords[ak] = self.atomArray[self.atomArrayIndex[ak]]
+        # if last_ord_res != []:
+        #    self.build_atomArray(akset) # do this after adding gcb's
+        # aa = np.array(tuple(atomCoordDict.values()))
+        # self.atomArray = np.insert(aa, 3, 1, axis=1)  # make homogeneous
+        # # self.atomVwArray = aa  # rtm:BpAtmVw
+        # siz = len(atomCoordDict)
+        # self.atomArrayIndex = dict(zip(atomCoordDict.keys(), range(siz)))
+        # self.atomArrayValid = np.ones(siz, dtype=bool)
+
+        # set all ric.atom_coords to be views on chain atomArray
+        # rtm think not needed after vectorise:
+        # for ric in self.ordered_aa_ic_list:
+        #    for ak in ric.atom_coords_vw.keys():
+        #        ric.atom_coords[ak] = self.atomArray[self.atomArrayIndex[ak]]
+        # rtm temp option
+        # for ric in self.ordered_aa_ic_list:
+        #    for ak in ric.ak_set:
+        #        ric.atom_coords[ak] = self.atomArray[self.atomArrayIndex[ak]]
 
     def link_residues(self) -> None:
         """link_dihedra() for each IC_Residue; needs rprev, rnext set.
@@ -415,32 +441,14 @@ class IC_Chain:
             ric.cic = self
             ric.link_dihedra()
 
-    def hedraDict2chain(
-        self,
-        akc: Dict[str, "AtomKey"],
-        hl12: Dict[str, float],
-        ha: Dict[str, float],
-        hl23: Dict[str, float],
-        da: Dict[str, float],
-        bfacs: Dict[str, float],
-    ) -> None:
-        """Generate chain numpy arrays from PICIO dicts."""
-        # atoms
-        akset = akc.values()
-        AAsiz = len(akset)
-        # sorted(akset) needed here for pdb atom serial number
-        self.atomArrayIndex = dict(zip(sorted(akset), range(AAsiz)))
-        self.atomArrayValid = np.zeros(AAsiz, dtype=bool)
-        self.atomArray = np.zeros((AAsiz, 4), dtype=np.float64)
-        self.atomArray[:, 3] = 1.0
+    def build_atomArray(self) -> None:
+        """Create Chain numpy coordinate array from biopython atoms."""
 
-        # set any supplied coordinates
-        # just loaded pic file so only start/chain break residues
-        # will have atoms
         def setAtom(res, atm):
             ak = AtomKey(res.internal_coord, atm)
             ndx = self.atomArrayIndex[ak]
             self.atomArray[ndx, 0:3] = atm.coord
+            atm.coord = self.atomArray[ndx, 0:3]  # make view on atomArray
             self.atomArrayValid[ndx] = True
 
         def setResAtms(res):
@@ -451,19 +459,112 @@ class IC_Chain:
                 else:
                     setAtom(res, atm)
 
-        for res in self.chain.get_residues():
-            if 2 == res.is_disordered():
-                for dres in res.child_dict.values():
-                    setResAtms(dres)
-            else:
-                setResAtms(res)
+        AAsiz = len(self.akset)
+        # sorted(akset) needed here for pdb atom serial number and to maintain
+        # consistency between a2ic and i2ac
+        self.atomArrayIndex = dict(zip(sorted(self.akset), range(AAsiz)))
+        self.atomArrayValid = np.zeros(AAsiz, dtype=bool)
+        self.atomArray = np.zeros((AAsiz, 4), dtype=np.float64)
+        self.atomArray[:, 3] = 1.0
+
+        for ric in self.ordered_aa_ic_list:
+            setResAtms(ric.residue)
+
+    def build_edraArrays(self) -> None:
+        """Build chain level hedra and dihedra arrays."""
+        # dihedra coord space
+        self.dCoordSpace: np.ndarray = np.empty(
+            (self.dihedraLen, 2, 4, 4), dtype=np.float64
+        )
+        self.dcsValid: np.ndarray = np.zeros((self.dihedraLen), dtype=np.bool)
+
+        # hedra atoms
+        self.hAtoms: np.ndarray = np.zeros((self.hedraLen, 3, 4), dtype=np.float64)
+        self.hAtoms[:, :, 3] = 1.0  # homogeneous
+        self.hAtomsR: np.ndarray = np.copy(self.hAtoms)
+        self.hAtoms_needs_update = np.full(self.hedraLen, True)
+
+        # maps between hAtoms and atomArray
+        a2ha_map = {}
+        # bond_map = {}
+
+        for hk, hndx in self.hedraNdx.items():
+            hstep = hndx * 3
+            for i in range(3):
+                ndx = self.atomArrayIndex[hk[i]]
+                a2ha_map[hstep + i] = ndx
+            self.hedra[hk].ndx = hndx
+            # a, b, c = hk[:]
+            # j, k, l = a2ha_map[hstep : hstep + 3]
+            # t0 = ((a, b) if (a <= b) else (b, a))
+            # t1 = ((b, c) if (b <= c) else (c, b))
+            # t2 = ((a, c) if (a <= c) else (c, a))
+            # bond_map[t0] = (j, k)
+            # bond_map[t1] = (k, l)
+            # bond_map[t2] = (j, l)
+        self.a2ha_map = np.array(tuple(a2ha_map.values()))
+
+        # dihedra atoms
+        self.dAtoms: np.ndarray = np.empty((self.dihedraLen, 4, 4), dtype=np.float64)
+        self.dAtoms[:, :, 3] = 1.0  # homogeneous
+        self.a4_pre_rotation = np.empty((self.dihedraLen, 4))
+
+        # maps between dAtoms and atomArray
+        # hedra and dihedra
+        # dihedra forward/reverse data
+        a2da_map = {}
+        a2d_map = [[[], []] for _ in range(len(self.akset))]
+        self.dRev: np.ndarray = np.zeros((self.dihedraLen), dtype=np.bool)
+
+        self.dH1ndx = np.empty(self.dihedraLen, dtype=np.int)
+        self.dH2ndx = np.empty(self.dihedraLen, dtype=np.int)
+        for dk, dndx in self.dihedraNdx.items():
+            # build map between atomArray and dAtoms
+            dstep = dndx * 4
+            for i in range(4):
+                ndx = self.atomArrayIndex[dk[i]]
+                a2da_map[dstep + i] = ndx
+                a2d_map[ndx][0].append(dndx)
+                a2d_map[ndx][1].append(i)
+            try:
+                self.dH1ndx[dndx] = self.hedraNdx[dk[0:3]]
+                self.dH2ndx[dndx] = self.hedraNdx[dk[1:4]]
+            except KeyError:
+                self.dH1ndx[dndx] = self.hedraNdx[dk[2::-1]]
+                self.dH2ndx[dndx] = self.hedraNdx[dk[3:0:-1]]
+                self.dRev[dndx] = True
+            self.dihedra[dk].ndx = dndx
+
+        self.a2da_map = np.array(tuple(a2da_map.values()))
+        self.d2a_map = self.a2da_map.reshape(-1, 4)
+        self.dFwd = self.dRev != True  # noqa: E712
+
+        # manually create np.where(atom in dihedral)
+        self.a2d_map = [(np.array(xi[0]), np.array(xi[1])) for xi in a2d_map]
+        self.dAtoms_needs_update = np.full(self.dihedraLen, True)
+
+    def hedraDict2chain(
+        self,
+        hl12: Dict[str, float],
+        ha: Dict[str, float],
+        hl23: Dict[str, float],
+        da: Dict[str, float],
+        bfacs: Dict[str, float],
+    ) -> None:
+        """Generate chain numpy arrays from PICIO read_PIC() dicts."""
+        self.set_residues()
+
+        # set any supplied coordinates from biopython atoms
+        # just loaded pic file so only start/chain break residues
+        # will have atoms
+        self.build_atomArray()
 
         # now create all biopython atoms for chain, setting coords to be view
         # on atomArray entry
         spNdx, icNdx, resnNdx, atmNdx, altlocNdx, occNdx = AtomKey.fields
         sn = None
         for ak, ndx in self.atomArrayIndex.items():
-            res = ak.icr.residue  # read_PIC inits with IC_Residue
+            res = ak.ric.residue  # read_PIC inits with IC_Residue
             atm, altloc = ak.akl[atmNdx], ak.akl[altlocNdx]
             occ = 1.00 if ak.akl[occNdx] is None else float(ak.akl[occNdx])
             bfac = bfacs.get(ak.id, 0.0)
@@ -499,7 +600,7 @@ class IC_Chain:
             else:
                 if 2 == bpAtm.is_disordered() and bpAtm.disordered_has_id(altloc):
                     bpAtm.disordered_select(altloc)
-                bpAtm.set_coord(self.atomArray[ndx][0:3])  # make view on atomArray
+                # bpAtm.set_coord(self.atomArray[ndx][0:3])  # done in build_atomArray
                 bpAtm.set_bfactor(bfac)
                 bpAtm.set_occupancy(occ)
                 sn = bpAtm.get_serial_number()
@@ -511,63 +612,15 @@ class IC_Chain:
         self.hedraL23 = np.fromiter(hl23.values(), dtype=np.float64)
         self.hedraNdx = dict(zip(ha.keys(), range(self.hedraLen)))
 
-        # hedra atoms
-        self.hAtoms: np.ndarray = np.zeros((self.hedraLen, 3, 4), dtype=np.float64)
-        self.hAtoms[:, :, 3] = 1.0  # homogeneous
-        self.hAtomsR: np.ndarray = np.copy(self.hAtoms)
-        self.hAtoms_needs_update = np.full(self.hedraLen, True)
-
         # dihedra
         self.dihedraLen = len(da)
-        self.dihedraIC = np.fromiter(da.values(), dtype=np.float64)
-        self.dihedraICr = np.deg2rad(self.dihedraIC)
+        self.dihedraAngle = np.fromiter(da.values(), dtype=np.float64)
+        self.dihedraAngleRads = np.deg2rad(self.dihedraAngle)
         self.dihedraNdx = dict(zip(da.keys(), range(self.dihedraLen)))
 
-        # dihedra atoms
-        self.dAtoms: np.ndarray = np.empty((self.dihedraLen, 4, 4), dtype=np.float64)
-        self.dAtoms[:, :, 3] = 1.0  # homogeneous
-        self.a4_pre_rotation = np.empty((self.dihedraLen, 4))
+        self.build_edraArrays()
 
-        # dihedra coord space
-        self.dCoordSpace: np.ndarray = np.empty(
-            (self.dihedraLen, 2, 4, 4), dtype=np.float64
-        )
-        self.dcsValid: np.ndarray = np.zeros((self.dihedraLen), dtype=np.bool)
-
-        # maps between dAtoms and atomArray
-        # dihedra forward/reverse data
-        a2da_map = {}
-        a2d_map = [[[], []] for _ in range(AAsiz)]
-        self.dRev: np.ndarray = np.zeros((self.dihedraLen), dtype=np.bool)
-
-        self.dH1ndx = np.empty(self.dihedraLen, dtype=np.int)
-        self.dH2ndx = np.empty(self.dihedraLen, dtype=np.int)
-        for dk, dndx in self.dihedraNdx.items():
-            # build map between atomArray and dAtoms
-            dstep = dndx * 4
-            for i in range(4):
-                ndx = self.atomArrayIndex[dk[i]]
-                a2da_map[dstep + i] = ndx
-                a2d_map[ndx][0].append(dndx)
-                a2d_map[ndx][1].append(i)
-            try:
-                self.dH1ndx[dndx] = self.hedraNdx[dk[0:3]]
-                self.dH2ndx[dndx] = self.hedraNdx[dk[1:4]]
-            except KeyError:
-                self.dH1ndx[dndx] = self.hedraNdx[dk[2::-1]]
-                self.dH2ndx[dndx] = self.hedraNdx[dk[3:0:-1]]
-                self.dRev[dndx] = True
-
-        self.a2da_map = np.array(tuple(a2da_map.values()))
-        self.d2a_map = self.a2da_map.reshape(-1, 4)
-        self.dFwd = self.dRev != True  # noqa: E712
-
-        # manually create np.where(atom in dihedral)
-        self.a2d_map = [(np.array(xi[0]), np.array(xi[1])) for xi in a2d_map]
-
-        self.dAtoms_needs_update = np.full(self.dihedraLen, True)
-
-        pass
+        pass  # rtm
 
     # @profile
     def ar2(self, verbose: bool = False) -> None:
@@ -690,6 +743,7 @@ class IC_Chain:
             if fin and fin < respos:
                 continue
 
+            # rtm
             ric.atom_coords = cast(
                 Dict[AtomKey, np.array], ric.assemble(verbose=verbose)
             )
@@ -703,6 +757,7 @@ class IC_Chain:
         """
         # rtm TODO: improve with numpy views on biopython Atom numpy array?
         # rtm:BpAtmVw
+        # rtm not used any more
 
         # rounding here is faster than in assemble_residues, but get drift
         # along chain as process structure
@@ -741,6 +796,8 @@ class IC_Chain:
         chain-level array data
         """
         if self.hedra == {}:
+            # rtm this branch not used by read_pic now
+            print("foo foo foo foo foo")
             if self.dihedra != {} or self.atomArrayIndex != {}:
                 raise RuntimeError("di/hedra sets inconsistent")
 
@@ -770,8 +827,8 @@ class IC_Chain:
             self.hedraL23 = np.fromiter(hL23.values(), dtype=np.float64)
 
             # dihedra
-            self.dihedraIC = np.array(tuple(dic.values()))
-            self.dihedraICr = np.deg2rad(self.dihedraIC)
+            self.dihedraAngle = np.array(tuple(dic.values()))
+            self.dihedraAngleRads = np.deg2rad(self.dihedraAngle)
             self.dihedraLen = len(self.dihedra)
 
             # homogeneous atoms to be in PDB coordinate space
@@ -791,6 +848,8 @@ class IC_Chain:
             # atom_to_internal_coords() populates self.hedra via _gen_edra()
             # a_to_ic will set ic so create empty
 
+            # rtm this branch not used either
+
             # hedra
             self.hedraLen = len(self.hedra)
             # self.hedraIC = np.empty((self.hedraLen, 3), dtype=np.float64)
@@ -800,8 +859,8 @@ class IC_Chain:
 
             # dihedra
             self.dihedraLen = len(self.dihedra)
-            self.dihedraIC = np.empty(self.dihedraLen)
-            self.dihedraICr = np.empty(self.dihedraLen)
+            self.dihedraAngle = np.empty(self.dihedraLen)
+            self.dihedraAngleRads = np.empty(self.dihedraLen)
 
             # atomArray built by IC_Chain.set_residues()
 
@@ -873,7 +932,7 @@ class IC_Chain:
 
     # @profile
     def init_atom_coords(self) -> None:
-        """Set chain level di/hedra initial coord arrays from IC_Residue data."""
+        """Set chain level di/hedra initial coords from angles and distances."""
         if not np.all(self.dAtoms_needs_update):
             self.dAtoms_needs_update |= (self.hAtoms_needs_update[self.dH1ndx]) | (
                 self.hAtoms_needs_update[self.dH2ndx]
@@ -956,7 +1015,7 @@ class IC_Chain:
         )  # so a2 at origin
 
         # build rz rotation matrix for dihedral angle
-        rz = multi_rot_Z(self.dihedraICr[self.dAtoms_needs_update])
+        rz = multi_rot_Z(self.dihedraAngleRads[self.dAtoms_needs_update])
 
         # p = np.matmul(mt, dha[:, 0].reshape(-1, 4, 1)).reshape(-1, 4)
         a4rot = np.matmul(
@@ -980,9 +1039,11 @@ class IC_Chain:
         # rtm:BpAtmVw
         # set all ric.atom_coords to be views on chain atomArray
         # also done at end of IC_Chain.write_SCAD()
-        for ric in self.ordered_aa_ic_list:
-            for ak in ric.ak_set:
-                ric.atom_coords[ak] = self.atomArray[self.atomArrayIndex[ak]]
+
+        # not needed with new vectorise - rtm
+        # for ric in self.ordered_aa_ic_list:
+        #    for ak in ric.ak_set:
+        #        ric.atom_coords[ak] = self.atomArray[self.atomArrayIndex[ak]]
 
     def update_dCoordSpace(self, workSelector: Optional[np.ndarray] = None) -> None:
         """Compute/update multiple coordinate space transforms for chain dihedra.
@@ -1028,9 +1089,9 @@ class IC_Chain:
                 if not hasattr(ric, "NCaCKey"):
                     print(f"no assembly for {ric} due to missing N, Ca and/or C atoms")
 
-        self.init_atom_coords()
+        self.init_atom_coords()  # compute initial di/hedra coords
         if IC_Chain.ParallelAssembleResidues:
-            self.ar2(verbose=verbose)
+            self.ar2(verbose=verbose)  # transform init di/hedra to chain coord space
 
             if verbose and not np.all(self.atomArrayValid):
                 dSetValid = self.atomArrayValid[self.a2da_map].reshape(-1, 4)
@@ -1055,6 +1116,41 @@ class IC_Chain:
         :param verbose bool: default False
             describe runtime problems
         """
+        """
+        atomArray
+        atomArrayIndex  : dict of atomKeys -> numpy array indexes
+        atomArrayValid
+
+        atomArray partly built by set_residues() when creating IC_Chain from Chain
+        probably most of that is ok because works out chain breaks
+        but maybe still extract atomArray build
+        build_atomArray() needs to create the numpy arrays too so needs ak list and count
+        need to build chain atomKey cache .akc and use cak() to get
+        read_PIC needs to build chain akc as well but will need to get atom str
+         - and what about altloc???
+        hedraDict2chain could build c.akc but perhaps akc not otherwise needed in ic2a?
+        good if dcs index could be consistent between a2ic, ic2a
+        """
+        # for res in self.chain.get_residues():
+        #    if 2 == res.is_disordered():
+
+        """
+        hedraLen (scalar)
+        hedraNdx  : dict of atomKey sequences -> numpy array indexes
+        hedraL12
+        hedraAngle
+        hedraL23
+        """
+        """
+        dihedraLen (scalar)
+        dihedraNdx  : dict of atomKey sequences -> numpy array indexes
+        dihedraAngle
+        dihedraAngleRad
+
+        dCoordSpace
+        dcsValid
+
+        """
         hedraAtomDict = {}
         dihedraAtomDict = {}
         hInDset = set()
@@ -1064,54 +1160,97 @@ class IC_Chain:
         for ric in self.ordered_aa_ic_list:
             ric.atom_to_internal_coordinates(verbose=verbose)  # builds di/hedra objects
 
+        self.build_atomArray()  # ric.a2ic added gly CBs to akset
+
         # if added Gly C-betas when building di/hedra residue objects, now need
         # to add additional atoms to the chain level numpy arrays
-        if IC_Residue.gly_Cbeta and hasattr(self, "gcb"):
-            gcbaa = np.array(tuple(self.gcb.values()))
-            siz = len(self.gcb)
-            start = len(self.atomArray)
-            gcbaaNdx = dict(zip(self.gcb.keys(), range(start, start + siz)))
-            gcbaaValid = np.zeros(siz, dtype=bool)
+        # if IC_Residue.gly_Cbeta and hasattr(self, "gcb"):
+        #    gcbaa = np.array(tuple(self.gcb.values()))
+        #    siz = len(self.gcb)
+        #    start = len(self.atomArray)
+        #    gcbaaNdx = dict(zip(self.gcb.keys(), range(start, start + siz)))
+        #    gcbaaValid = np.zeros(siz, dtype=bool)
 
-            self.atomArray = np.append(self.atomArray, gcbaa, axis=0)
-            self.atomArrayValid = np.append(self.atomArrayValid, gcbaaValid, axis=0)
-            self.atomArrayIndex.update(gcbaaNdx)
-            delattr(self, "gcb")
+        #    self.atomArray = np.append(self.atomArray, gcbaa, axis=0)
+        #    self.atomArrayValid = np.append(self.atomArrayValid, gcbaaValid, axis=0)
+        #    self.atomArrayIndex.update(gcbaaNdx)
+        #    delattr(self, "gcb")
 
-        self.init_edra()
+        # self.init_edra()  # rtm create empty chain hLAL, da arrays
 
-        for ric in self.ordered_aa_ic_list:
-            for k, d in ric.dihedra.items():
-                hInDset.update((d.h1key, d.h2key))
-                try:
-                    # get tuple of atom_coords from ric dict
-                    dihedraAtomDict[k] = d.gen_acs(ric.atom_coords)
-                except KeyError:
-                    gCBdihedra.add(d)  # no atom_coords yet for gly CB
-                    # init to rough approximation, overwrite later
-                    # dihedron = O-C-Ca-Cb
-                    # h1 = Ca-C-O (reversed)
-                    # h2 = Cb-Ca-C (reversed)
-                    # need dihedron atom coords all forward
-                    h1 = d.hedron1.gen_acs(ric.atom_coords)
-                    h1 = np.flipud(h1)  # reverse h1 coords for building dihedron
-                    xgcb = np.append(h1, [h1[2]], axis=0)
-                    xgcb[3, 0] = xgcb[3, 0] + 1.0
-                    dihedraAtomDict[k] = xgcb
+        # hedra
+        self.hedraLen = len(self.hedra)
+        self.hedraL12 = np.empty((self.hedraLen), dtype=np.float64)
+        self.hedraAngle = np.empty((self.hedraLen), dtype=np.float64)
+        self.hedraL23 = np.empty((self.hedraLen), dtype=np.float64)
 
-            for k, h in ric.hedra.items():
-                if k not in hInDset:
-                    # print("inaccessible hedron outside dihedron: ", h)
+        self.hedraNdx = dict(zip(self.hedra.keys(), range(len(self.hedra))))
+
+        # dihedra
+        self.dihedraLen = len(self.dihedra)
+        self.dihedraAngle = np.empty(self.dihedraLen)
+        self.dihedraAngleRads = np.empty(self.dihedraLen)
+
+        self.dihedraNdx = dict(zip(self.dihedra.keys(), range(self.dihedraLen)))
+
+        self.build_edraArrays()
+        # rtm think good to here
+
+        # rtm skip this
+        if False:
+            # rtm here we build h and d atom arrays from ric's
+            # but should be able to mke some map from ak strings like for i2a
+            # excluding the gcb parts here
+            for ric in self.ordered_aa_ic_list:
+                for k, d in ric.dihedra.items():
+                    hInDset.update((d.h1key, d.h2key))
                     try:
-                        hedraAtomDict[k] = h.gen_acs(ric.atom_coords)
-                    except KeyError:  # gly CB
-                        hedraAtomDict[k] = np.array(
-                            [[1, 2, 3, 1], [2, 2, 3, 1], [3, 2, 3, 1]]
-                        )
+                        # get tuple of atom_coords from ric dict
+                        dihedraAtomDict[k] = d.gen_acs(ric.atom_coords)
+                    except KeyError:
+                        gCBdihedra.add(d)  # no atom_coords yet for gly CB
+                        # init to rough approximation, overwrite later
+                        # dihedron = O-C-Ca-Cb
+                        # h1 = Ca-C-O (reversed)
+                        # h2 = Cb-Ca-C (reversed)
+                        # need dihedron atom coords all forward
+                        h1 = d.hedron1.gen_acs(ric.atom_coords)
+                        h1 = np.flipud(h1)  # reverse h1 coords for building dihedron
+                        xgcb = np.append(h1, [h1[2]], axis=0)
+                        xgcb[3, 0] = xgcb[3, 0] + 1.0
+                        dihedraAtomDict[k] = xgcb
+
+                for k, h in ric.hedra.items():
+                    if k not in hInDset:
+                        # print("inaccessible hedron outside dihedron: ", h)
+                        try:
+                            hedraAtomDict[k] = h.gen_acs(ric.atom_coords)
+                        except KeyError:  # gly CB
+                            hedraAtomDict[k] = np.array(
+                                [[1, 2, 3, 1], [2, 2, 3, 1], [3, 2, 3, 1]]
+                            )
 
         if self.dihedra == {}:
             return  # escape if no hedra loaded for this chain
 
+        # process all hedra
+        ha = self.atomArray[self.a2ha_map].reshape(-1, 3, 4)
+        self.hedraL12 = np.linalg.norm(ha[:, 0] - ha[:, 1], axis=1)
+        self.hedraL23 = np.linalg.norm(ha[:, 1] - ha[:, 2], axis=1)
+        h_a0a2 = np.linalg.norm(ha[:, 0] - ha[:, 2], axis=1)
+        np.rad2deg(
+            np.arccos(
+                (
+                    np.square(self.hedraL12)
+                    + np.square(self.hedraL23)
+                    - np.square(h_a0a2)
+                )
+                / (2 * self.hedraL12 * self.hedraL23)
+            ),
+            out=self.hedraAngle,
+        )
+
+        # rtm skip this for now
         if hedraAtomDict != {}:
             # some hedra not in dihedra to process
             # issue from alternate CB path, triggered by residue sidechain path not
@@ -1142,35 +1281,47 @@ class IC_Chain:
                     h.L23 = h_a1a2[hndx]
 
         # now process dihedra
-        dLen = self.dihedraLen
-        dha = np.array(tuple(dihedraAtomDict.values()))
-        dhai = dict(zip(self.dihedra.keys(), range(dLen)))
+        # dLen = self.dihedraLen
+        # dha = np.array(tuple(dihedraAtomDict.values()))
+        # dhai = dict(zip(self.dihedra.keys(), range(dLen)))
+
+        # rtm
+        # ok need a ha array and a2ha_map to run all hedra
+        # can we split out bonds as well...
+
+        dha = self.atomArray[self.a2da_map].reshape(-1, 4, 4)
 
         # get dadad dist-angle-dist-angle-dist for dihedra
-        a0a1 = np.linalg.norm(dha[:, 0] - dha[:, 1], axis=1)
-        a1a2 = np.linalg.norm(dha[:, 1] - dha[:, 2], axis=1)
-        a2a3 = np.linalg.norm(dha[:, 2] - dha[:, 3], axis=1)
+        # a0a1 = np.linalg.norm(dha[:, 0] - dha[:, 1], axis=1)
+        # a1a2 = np.linalg.norm(dha[:, 1] - dha[:, 2], axis=1)
+        # a2a3 = np.linalg.norm(dha[:, 2] - dha[:, 3], axis=1)
 
-        a0a2 = np.linalg.norm(dha[:, 0] - dha[:, 2], axis=1)
-        a1a3 = np.linalg.norm(dha[:, 1] - dha[:, 3], axis=1)
-        sqr_a1a2 = np.multiply(a1a2, a1a2)
+        # a0a2 = np.linalg.norm(dha[:, 0] - dha[:, 2], axis=1)
+        # a1a3 = np.linalg.norm(dha[:, 1] - dha[:, 3], axis=1)
+        # sqr_a1a2 = np.multiply(a1a2, a1a2)
 
-        a0a1a2 = np.rad2deg(
-            np.arccos(((a0a1 * a0a1) + sqr_a1a2 - (a0a2 * a0a2)) / (2 * a0a1 * a1a2))
-        )
+        # a0a1a2 = np.rad2deg(
+        #    np.arccos(((a0a1 * a0a1) + sqr_a1a2 - (a0a2 * a0a2)) / (2 * a0a1 * a1a2))
+        # )
 
-        a1a2a3 = np.rad2deg(
-            np.arccos((sqr_a1a2 + (a2a3 * a2a3) - (a1a3 * a1a3)) / (2 * a1a2 * a2a3))
-        )
+        # a1a2a3 = np.rad2deg(
+        #    np.arccos((sqr_a1a2 + (a2a3 * a2a3) - (a1a3 * a1a3)) / (2 * a1a2 * a2a3))
+        # )
 
         # develop coord_space matrix for 1st 3 atoms of dihedra:
-        mt = multi_coord_space(dha, dLen, False)
+        mt = multi_coord_space(dha, self.dihedraLen, False)
 
         # now put atom 4 into that coordinate space and read dihedral as azimuth
         do4 = np.matmul(mt, dha[:, 3].reshape(-1, 4, 1)).reshape(-1, 4)
 
-        np.arctan2(do4[:, 1], do4[:, 0], out=self.dihedraICr)
-        np.rad2deg(self.dihedraICr, out=self.dihedraIC)
+        np.arctan2(do4[:, 1], do4[:, 0], out=self.dihedraAngleRads)
+        np.rad2deg(self.dihedraAngleRads, out=self.dihedraAngle)
+
+        """
+        # rtm HERE now need map from dha to h1, h2 to store LAL results
+        self.hedraL12 =
+        # rtm here copying everything back to dihedra objects, they should reference
+        # chain hLAL, da if anything
 
         # build hedra arrays
 
@@ -1221,9 +1372,58 @@ class IC_Chain:
 
             # hed1.angle = a0a1a2[dndx]
             # hed2.angle = a1a2a3[dndx]
+        """
+        # for gCBd in gCBdihedra:
+        #    gCBd.ic_residue.build_glyCB(gCBd)
+        if hasattr(self, "gcb"):
+            self.spec_glyCB()
 
-        for gCBd in gCBdihedra:
-            gCBd.ic_residue.build_glyCB(gCBd)
+    def spec_glyCB(self) -> None:
+        """Populate values for Gly C-beta, rest of chain complete.
+
+        Data averaged from Sep 2019 Dunbrack cullpdb_pc20_res2.2_R1.0
+        restricted to structures with amide protons.
+
+        Ala avg rotation of OCCACB from NCACO query:
+        select avg(g.rslt) as avg_rslt, stddev(g.rslt) as sd_rslt, count(*)
+        from
+        (select f.d1d, f.d2d,
+        (case when f.rslt > 0 then f.rslt-360.0 else f.rslt end) as rslt
+        from (select d1.angle as d1d, d2.angle as d2d,
+        (d2.angle - d1.angle) as rslt from dihedron d1,
+        dihedron d2 where d1.rdh_class='AOACACAACB' and
+        d2.rdh_class='ANACAACAO' and d1.pdb=d2.pdb and d1.chn=d2.chn
+        and d1.res=d2.res) as f) as g
+
+        | avg_rslt          | sd_rslt          | count   |
+        | -122.682194862932 | 5.04403040513919 | 14098   |
+
+        """
+        Ca_Cb_Len = 1.53363
+        if hasattr(self, "scale"):  # used for openscad output
+            Ca_Cb_Len *= self.scale  # type: ignore
+
+        for gcb in self.gcb:
+            cbak = gcb[3]
+            self.atomArrayValid[self.atomArayIndex[cbak]] = False
+            ric = cbak.ric
+            rN, rCA, rC, rO = ric.rak("N"), ric.rak("CA"), ric.rak("C"), ric.rak("O")
+            gCBd = self.dihedra[gcb]
+            dndx = gCBd.ndx
+            # generated dihedron is O-Ca-C-Cb
+            # hedron2 is reversed: Cb-Ca-C (also h1 reversed: C-Ca-O)
+            h2ndx = gCBd.hedron2.ndx
+            self.hedraL12[h2ndx] = Ca_Cb_Len
+            self.hedraAngle[h2ndx] = 110.17513
+            self.hedraL23[h2ndx] = self.hedraL12[self.hedraNdx[(rCA, rC, rO)]]
+            gCBd.hedron2._invalidate_atoms()
+
+            refval = self.dihedra.get((rN, rCA, rC, rO), None)
+            if refval:
+                angl = 122.68219 + self.dihedraAngle[refval.ndx]
+                self.dihedraAngle[dndx] = angl if (angl <= 180.0) else angl - 360.0
+            else:
+                self.dihedraAngle[dndx] = 120
 
     @staticmethod
     def _write_mtx(fp: TextIO, mtx: np.array) -> None:
@@ -1546,8 +1746,8 @@ class IC_Residue:
         Local copy of atom homogeneous coordinates [4] for work
         Actually a view into IC_Chain's atomArray
         distinct from Bopython Residue/Atom values
-    atom_coords_vw: AtomKey indexed dict of numpy [3] arrays
-        numpy view into Biopython Residue/Atom values
+    #atom_coords_vw: AtomKey indexed dict of numpy [3] arrays
+        #numpy view into Biopython Residue/Atom values
     alt_ids: list of char
         AltLoc IDs from PDB file
     bfactors: dict
@@ -1558,6 +1758,8 @@ class IC_Residue:
     is20AA: bool
         True if residue is one of 20 standard amino acids, based on
         Residue resname
+    isAccept: bool
+        True if is20AA or in accept_resnames below
     accept_atoms: tuple
         list of PDB atom names to use when generatiing internal coordinates.
         Default is:
@@ -1614,7 +1816,7 @@ class IC_Residue:
     Methods
     -------
     applyMtx()
-        multiply all IC_Residue atom_cords by passed matrix
+        multiply all IC_Residue atom_coords by passed matrix
     assemble(atomCoordsIn, resetLocation, verbose)
         Compute atom coordinates for this residue from internal coordinates
     atm241(coord)
@@ -1684,12 +1886,13 @@ class IC_Residue:
         # local copy, homogeneous coordinates for atoms, numpy [4]
         # generated from dihedra include some i+1 atoms
         # or initialised here from parent residue if loaded from coordinates
-        self.atom_coords: Dict["AtomKey", np.array] = {}  # homog coords
-        self.atom_coords_vw: Dict["AtomKey", np.array] = {}  # view on Atoms
+        # self.atom_coords: Dict["AtomKey", np.array] = {}  # homog coords
+        # self.atom_coords_vw: Dict["AtomKey", np.array] = {}  # view on Atoms
         # bfactors copied from PDB file
         self.bfactors: Dict[str, float] = {}
         self.alt_ids: Union[List[str], None] = None if NO_ALTLOC else []
         self.is20AA = True
+        self.isAccept = True
         # rbase = position, insert code or none, resname (1 letter if in 20)
         rid = parent.id
         rbase = [rid[1], rid[2] if " " != rid[2] else None, parent.resname]
@@ -1697,11 +1900,13 @@ class IC_Residue:
             rbase[2] = three_to_one(rbase[2]).upper()
         except KeyError:
             self.is20AA = False
+            if rbase[2] not in self.accept_resnames:
+                self.isAccept = False
 
         self.rbase = tuple(rbase)
         self.lc = rbase[2]
 
-        if self.is20AA or rbase[2] in self.accept_resnames:
+        if self.isAccept:
             for atom in parent.get_atoms():
                 if hasattr(atom, "child_dict"):
                     if NO_ALTLOC:
@@ -1729,7 +1934,12 @@ class IC_Residue:
         return ak
 
     def build_rak_cache(self) -> None:
-        """Create explicit entries for for atoms so don't miss altlocs."""
+        """Create explicit entries for for atoms so don't miss altlocs.
+
+        This ensures that akc has an entry for selected atom name (e.g. "CA")
+        amongst any that have altlocs.  Without this, rak() on the other altloc
+        atom first may result in the main atom being missed.
+        """
         for ak in sorted(self.ak_set):
             atmName = ak.akl[3]
             if self.akc.get(atmName) is None:
@@ -1900,7 +2110,7 @@ class IC_Residue:
             # print('skip:', atm.name)
             return
         ak = self.rak(atm)  # passing Atom here not string
-        self.atom_coords_vw[ak] = atm.coord
+        # rtm self.atom_coords_vw[ak] = atm.coord
         self.ak_set.add(ak)
 
     def __repr__(self) -> str:
@@ -1917,6 +2127,7 @@ class IC_Residue:
 
         :param edron: parse dictionary from Edron.edron_re
         """
+        # rtm not used
         if edron["a4"] is None:  # PIC line is Hedron
             ek = (AtomKey(edron["a1"]), AtomKey(edron["a2"]), AtomKey(edron["a3"]))
             self.hedra[ek] = Hedron(ek, **edron)
@@ -1937,6 +2148,7 @@ class IC_Residue:
         - form ak_set
         - set NCaCKey to be available AtomKeys
         """
+        # rtm not called so far from new read_PIC
         id3i: Dict[HKT, List[Dihedron]] = {}
         for dh in self.dihedra.values():
             dh.ic_residue = self  # each dihedron can find its IC_Residue
@@ -2019,6 +2231,7 @@ class IC_Residue:
 
     def get_startpos(self) -> Dict["AtomKey", np.array]:
         """Find N-Ca-C coordinates to build this residue from."""
+        # rtm only used by assemble()
         if 0 < len(self.rprev):
             # if there is a previous residue, build on from it
             startPos = {}
@@ -2384,7 +2597,7 @@ class IC_Residue:
         if self.lc != "G":
             sCB = self.rak("CB")
 
-        # first __init__ di/hedra, AtomKey objects and atom_coords for di/hedra
+        # first init di/hedra, AtomKey objects and atom_coords for di/hedra
         # which extend into next residue.
 
         if 0 < len(self.rnext) and self.rnext[0].ak_set:
@@ -2397,13 +2610,13 @@ class IC_Residue:
 
                 for tpl in nextNCaC:
                     for ak in tpl:
-                        if ak in rn.atom_coords:
-                            self.atom_coords[ak] = rn.atom_coords[ak]
+                        if ak in rn.ak_set:  # rn.atom_coords:
+                            # self.atom_coords[ak] = rn.atom_coords[ak]
                             self.ak_set.add(ak)
                         else:
-                            for rn_ak in rn.atom_coords.keys():
+                            for rn_ak in rn.ak_set:  # rn.atom_coords.keys():
                                 if rn_ak.altloc_match(ak):
-                                    self.atom_coords[rn_ak] = rn.atom_coords[rn_ak]
+                                    # self.atom_coords[rn_ak] = rn.atom_coords[rn_ak]
                                     self.ak_set.add(rn_ak)
 
                 self._gen_edra((sN, sCA, sC, nN))  # psi
@@ -2417,8 +2630,8 @@ class IC_Residue:
                 # otherwise missing O will cause no sidechain
                 # not rn.rak so don't trigger missing CB for Gly
                 nCB = rn.akc.get("CB", None)
-                if nCB is not None and nCB in rn.atom_coords:
-                    self.atom_coords[nCB] = rn.atom_coords[nCB]
+                if nCB is not None and nCB in rn.ak_set:  # rn.atom_coords:
+                    # self.atom_coords[nCB] = rn.atom_coords[nCB]
                     self.ak_set.add(nCB)
                     self._gen_edra((nN, nCA, nCB))
                     self._gen_edra((sC, nN, nCA, nCB))
@@ -2474,13 +2687,14 @@ class IC_Residue:
             self.ak_set.add(AtomKey(self, "CB"))
             sCB = self.rak("CB")
             sCB.missing = False  # was True because akc cache did not have entry
-
+            self.cic.ak_set.add(sCB)
             # self.atom_coords[sCB] = None
 
             # main orientation comes from O-C-Ca-Cb so make Cb-Ca-C hedron
             sO = self.rak("O")
             htpl = (sCB, sCA, sC)
             self._gen_edra(htpl)
+            # rtm - old, cleanup
             # values generated in build_glyCB
             # h = self.hedra[htpl]
             # h.lal[2] = self.hedra[(sCA, sC, sO)].lal[0]  # CaCO len12 -> len23
@@ -2494,13 +2708,18 @@ class IC_Residue:
             d.ic_residue = self
             d.set_hedra()
 
+            # rtm is this necessary, and can't we do just once below if so?
             self.link_dihedra(verbose)  # re-run for new dihedra
 
             # prepare to add new Gly CB atom(s)
             # in IC_Chain.atom_to_internal_coordinates()
             if not hasattr(self.cic, "gcb"):
-                self.cic.gcb: Dict[AtomKey, np.array] = {}
-            self.cic.gcb[sCB] = np.array((0, 0, 0, 1), dtype=np.float64)
+                self.cic.gcb: Dict[AtomKey, Tuple] = {}
+                # self.cic.gcb: List[AtomKey] = []
+                # self.cic.gcb: Dict[AtomKey, np.array] = {}
+            self.cic.gcb[sCB] = dtpl
+            # self.cic.gcb.append(sCB)
+            # self.cic.gcb[sCB] = np.array((0, 0, 0, 1), dtype=np.float64)
 
         if verbose:
             # oAtom =
@@ -2514,49 +2733,6 @@ class IC_Residue:
                 chn_id = chn.id
                 chn_len = len(chn.internal_coord.ordered_aa_ic_list)
                 print(f"chain {chn_id} len {chn_len} missing atom(s): {missing}")
-
-    def build_glyCB(self, gCBd: "Dihedron"):
-        """Populate values for Gly C-beta, rest of chain complete.
-
-        Data averaged from Sep 2019 Dunbrack cullpdb_pc20_res2.2_R1.0
-        restricted to structures with amide protons.
-
-        Ala avg rotation of OCCACB from NCACO query:
-        select avg(g.rslt) as avg_rslt, stddev(g.rslt) as sd_rslt, count(*)
-        from
-        (select f.d1d, f.d2d,
-        (case when f.rslt > 0 then f.rslt-360.0 else f.rslt end) as rslt
-        from (select d1.angle as d1d, d2.angle as d2d,
-        (d2.angle - d1.angle) as rslt from dihedron d1,
-        dihedron d2 where d1.rdh_class='AOACACAACB' and
-        d2.rdh_class='ANACAACAO' and d1.pdb=d2.pdb and d1.chn=d2.chn
-        and d1.res=d2.res) as f) as g
-
-        | avg_rslt          | sd_rslt          | count   |
-        | -122.682194862932 | 5.04403040513919 | 14098   |
-
-        """
-        Ca_Cb_Len = 1.53363
-        if hasattr(self, "scale"):  # used for openscad output
-            Ca_Cb_Len *= self.scale  # type: ignore
-
-        sN, sCA, sC, sO = self.rak("N"), self.rak("CA"), self.rak("C"), self.rak("O")
-
-        # generated dihedron is O-Ca-C-Cb
-        # hedron2 is reversed: Cb-Ca-C (also h1 reversed: C-Ca-O)
-        h2 = gCBd.hedron2
-        # h2.lal[:] = (Ca_Cb_Len, 110.17513, self.hedra[(sCA, sC, sO)].lal[0])
-        h2.L12 = Ca_Cb_Len
-        h2.Angle = 110.17513
-        h2.L23 = self.hedra[(sCA, sC, sO)].L12
-
-        refval = self.dihedra.get((sN, sCA, sC, sO), None)
-        if refval:
-            gCBd.angle = 122.68219 + refval.angle
-            if gCBd.angle > 180.0:
-                gCBd.angle -= 360.0
-        else:
-            gCBd.angle = 120
 
     @staticmethod
     def _pdb_atom_string(atm: Atom) -> str:
@@ -2648,16 +2824,19 @@ class IC_Residue:
                     pass
 
         base = pdbid + " " + chainid + " "
+
+        cic = self.cic
         for h in sorted(self.hedra.values()):
+            hndx = h.ndx
             try:
                 s += (
                     base
                     + h.id
                     + " "
                     + "{:9.5f} {:9.5f} {:9.5f}".format(
-                        set_accuracy_95(h.L12),  # (h.lal[0]),  # len12
-                        set_accuracy_95(h.Angle),  # (h.lal[1]),  # angle
-                        set_accuracy_95(h.L23),  # (h.lal[2]),  # len23
+                        set_accuracy_95(cic.hedraL12[hndx]),  # (h.lal[0]),  # len12
+                        set_accuracy_95(cic.hedraAngle[hndx]),  # (h.lal[1]),  # angle
+                        set_accuracy_95(cic.hedraL23[hndx]),  # (h.lal[2]),  # len23
                     )
                 )
             except KeyError:
@@ -2665,7 +2844,12 @@ class IC_Residue:
             s += "\n"
         for d in sorted(self.dihedra.values()):
             try:
-                s += base + d.id + " " + "{:9.5f}".format(set_accuracy_95(d.angle))
+                s += (
+                    base
+                    + d.id
+                    + " "
+                    + "{:9.5f}".format(set_accuracy_95(cic.dihedraAngle[d.ndx]))
+                )
             except KeyError:
                 pass
             s += "\n"
@@ -3272,22 +3456,22 @@ class Hedron(Edron):
         # initially atom1 on +Z axis
         self.atomsR: HACS
 
-        if "len12" in kwargs:
-            # self.lal = np.array(
-            #    (
-            #        float(kwargs["len12"]),
-            #        float(kwargs["angle"]),
-            #        float(kwargs["len23"]),
-            #    )
-            # )
-            self.L12 = np.array(float(kwargs["len12"]), dtype=np.float64)
-            self.Angle = np.array(float(kwargs["angle"]), dtype=np.float64)
-            self.L23 = np.array(float(kwargs["len23"]), dtype=np.float64)
-        else:
-            # self.lal = np.zeros(3)
-            self.L12 = np.zeros(1)
-            self.Angle = np.zeros(1)
-            self.L23 = np.zeros(1)
+        # if "len12" in kwargs:
+        #    # self.lal = np.array(
+        #    #    (
+        #    #        float(kwargs["len12"]),
+        #    #        float(kwargs["angle"]),
+        #    #        float(kwargs["len23"]),
+        #    #    )
+        #    # )
+        #    self.L12 = np.array(float(kwargs["len12"]), dtype=np.float64)
+        #    self.Angle = np.array(float(kwargs["angle"]), dtype=np.float64)
+        #    self.L23 = np.array(float(kwargs["len23"]), dtype=np.float64)
+        # else:
+        #    # self.lal = np.zeros(3)
+        #    self.L12 = np.zeros(1)
+        #    self.Angle = np.zeros(1)
+        #    self.L23 = np.zeros(1)
 
         # else:
         #    self.len12 = None
@@ -3306,12 +3490,12 @@ class Hedron(Edron):
         """Get this hedron angle."""
         try:
             # return self.lal[1]  # _angle
-            return self.Angle  # _angle
+            return self.cic.hedraAngle[self.ndx]  # _angle
         except AttributeError:
             return 0.0
 
     def _invalidate_atoms(self):
-        self.cic.hAtoms_needs_update[self.cic.hedraNdx[self.aks]] = True
+        self.cic.hAtoms_needs_update[self.ndx] = True
         for ak in self.aks:
             self.cic.atomArrayValid[self.cic.atomArrayIndex[ak]] = False
 
@@ -3319,7 +3503,7 @@ class Hedron(Edron):
     def angle(self, angle_deg) -> None:
         """Set this hedron angle; sets needs_update."""
         # self.lal[1] = angle_deg  # view on chain numpy arrays
-        self.Angle = angle_deg
+        self.cic.hedraAngle[self.ndx] = angle_deg
         self._invalidate_atoms()
 
     @property
@@ -3327,7 +3511,7 @@ class Hedron(Edron):
         """Get first length for Hedron."""
         try:
             # return self.lal[0]  # _len12
-            return self.L12
+            return self.cic.hedraL12[self.ndx]
         except AttributeError:
             return 0.0
 
@@ -3335,7 +3519,7 @@ class Hedron(Edron):
     def len12(self, len):
         """Set first length for Hedron; sets needs_update."""
         # self.lal[0]  # _len12 = len  # rtm
-        self.L12 = len
+        self.cic.hedraL12[self.ndx] = len
         self._invalidate_atoms()
 
     @property
@@ -3343,7 +3527,7 @@ class Hedron(Edron):
         """Get second length for Hedron."""
         try:
             # return self.lal[2]  # _len23
-            return self.L23
+            return self.cic.hedraL23[self.ndx]
         except AttributeError:
             return 0.0
 
@@ -3351,7 +3535,7 @@ class Hedron(Edron):
     def len23(self, len):
         """Set second length for Hedron; sets needs_update."""
         # self.lal[2] = len
-        self.l23 = len
+        self.cic.hedraL23[self.ndx] = len
         self._invalidate_atoms()
 
     def get_length(self, ak_tpl: BKT) -> Optional[float]:
@@ -3364,10 +3548,10 @@ class Hedron(Edron):
             return None
         if all(ak in self.aks[:2] for ak in ak_tpl):
             # return self.lal[0]  # len12
-            return self.L12
+            return self.cic.hedraL12[self.ndx]
         if all(ak in self.aks[1:] for ak in ak_tpl):
             # return self.lal[2]  # len23
-            return self.L23
+            return self.cic.hedraL23[self.ndx]
         return None
 
     def set_length(self, ak_tpl: BKT, newLength: float):
@@ -3380,10 +3564,10 @@ class Hedron(Edron):
             raise TypeError("Require exactly 2 AtomKeys: %s" % (str(ak_tpl)))
         elif all(ak in self.aks[:2] for ak in ak_tpl):
             # self.lal[0] = newLength  # len12
-            self.L12 = newLength
+            self.cic.hedraL12[self.ndx] = newLength
         elif all(ak in self.aks[1:] for ak in ak_tpl):
             # self.lal[2] = newLength  # len23
-            self.L23 = newLength
+            self.cic.hedraL23[self.ndx] = newLength
         else:
             raise TypeError("%s not found in %s" % (str(ak_tpl), self))
         self._invalidate_atoms()
@@ -3462,8 +3646,8 @@ class Dihedron(Edron):
         # self.cst = None  # protein coords to 1st hedron coord space
         # self.rcst = None  # reverse = 1st hedron coords back to protein coords
 
-        if "dihedral" in kwargs:
-            self.angle = float(kwargs["dihedral"])
+        # if "dihedral" in kwargs:
+        #    self.angle = float(kwargs["dihedral"])
 
     def __repr__(self) -> str:
         """Print string for Dihedron object."""
@@ -3529,7 +3713,7 @@ class Dihedron(Edron):
     def angle(self) -> float:
         """Get dihedral angle."""
         try:
-            return self.cic.dihedraIC[self.cic.dihedraNdx[self.aks]]
+            return self.cic.dihedraAngle[self.ndx]
         except AttributeError:
             try:
                 return self._dihedral
@@ -3555,9 +3739,9 @@ class Dihedron(Edron):
         self.needs_update = True
         try:
             cic = self.cic
-            dndx = cic.dihedraNdx[self.aks]
-            cic.dihedraIC[dndx] = dangle_deg
-            cic.dihedraICr[dndx] = np.deg2rad(dangle_deg)
+            dndx = self.ndx
+            cic.dihedraAngle[dndx] = dangle_deg
+            cic.dihedraAngleRads[dndx] = np.deg2rad(dangle_deg)
             cic.dAtoms_needs_update[dndx] = True
             cic.atomArrayValid[cic.atomArrayIndex[self.aks[3]]] = False
         except AttributeError:
@@ -3641,7 +3825,7 @@ class AtomKey:
             52_G_CA, 52B_G_CA, 52_G_CA_0.33, 52_G_CA_B_0.33  : id strings
         """
         akl: List[Optional[str]] = []
-        self.icr = None
+        self.ric = None
         # self.id = None
         for arg in args:
             if isinstance(arg, str):
@@ -3667,7 +3851,7 @@ class AtomKey:
                 if akl != []:
                     raise Exception("Atom Key init Residue not first argument")
                 akl = list(arg.rbase)
-                self.icr = arg
+                self.ric = arg
             elif isinstance(arg, Atom):
                 # AtomKey.icd["atm"] += 1
                 if 3 != len(akl):
