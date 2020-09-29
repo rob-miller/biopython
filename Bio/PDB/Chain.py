@@ -192,7 +192,7 @@ class Chain(Entity):
 
         :param verbose bool: default False
             describe runtime problems
-        :raises Exception: if any chain does not have .pic attribute
+        :raises Exception: if any chain does not have .internal_coord attribute
         """
         if self.internal_coord:
             self.internal_coord.internal_to_atom_coordinates(verbose=verbose)
