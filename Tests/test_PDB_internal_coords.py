@@ -79,7 +79,7 @@ class Rebuild(unittest.TestCase):
                 break
         mdl.atom_to_internal_coordinates()
         # other tests show can build with arbitrary internal coords
-        # build here so changes below trigger more comlicated
+        # build here so changes below trigger more complicated
         # xAtoms_needs_update mask arrays
         mdl.internal_to_atom_coordinates()
         nvt = {}
