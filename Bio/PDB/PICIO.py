@@ -32,7 +32,7 @@ from Bio.PDB.internal_coords import (
     AtomKey,
 )
 
-from typing import Dict, TextIO, Set
+from typing import Dict, TextIO, Set, List
 from Bio.PDB.Structure import Structure
 from Bio.PDB.Chain import Chain
 from Bio.PDB.Residue import Residue
@@ -139,6 +139,11 @@ def read_PIC(file: TextIO, verbose: bool = False) -> Structure:
 
     orphan_aks = set()  # []
 
+    chainBreak = True
+    tr = []  # this residue
+    pr = []  # previous residue
+    ppr = []  # previous previous residue
+
     def akcache(akstr: str) -> AtomKey:
         # akstr: full AtomKey string read from .pic file - includes residue info
         try:
@@ -153,6 +158,14 @@ def read_PIC(file: TextIO, verbose: bool = False) -> Structure:
             and ((ak.akl[1] is None and res.id[2] == " ") or (ak.akl[1] == res.id[2]))
             and ak.akl[2] == three_to_one(res.resname)
         )
+
+    def link_residues(ppr: List[Residue], pr: List[Residue]) -> None:
+        for p_r in pr:
+            pric = p_r.internal_coord
+            for p_p_r in ppr:
+                ppric = p_p_r.internal_coord
+                ppric.rnext.append(pric)
+                pric.rprev.append(ppric)
 
     with as_handle(file, mode="r") as handle:
         for aline in handle.readlines():
@@ -191,6 +204,9 @@ def read_PIC(file: TextIO, verbose: bool = False) -> Structure:
                             hl23 = {}
                             da = {}
                             bfacs = {}
+                            chainBreak = True
+                            last_res = []
+                            last_ord_res = []
                         # init new Biopython SMCS level as needed
                         for i in range(4):
                             if curr_SMCS[i] != this_SMCS[i]:
@@ -220,6 +236,15 @@ def read_PIC(file: TextIO, verbose: bool = False) -> Structure:
                             if not r.internal_coord:
                                 sb_res = r
                                 break
+                        # added to disordered res
+                        tr.append(sb_res)
+                    else:
+                        # new res
+                        link_residues(ppr, pr)
+                        ppr = pr
+                        pr = tr
+                        tr = [sb_res]
+
                     sbric = sb_res.internal_coord = IC_Residue(
                         sb_res
                     )  # no atoms so no rak
@@ -229,6 +254,7 @@ def read_PIC(file: TextIO, verbose: bool = False) -> Structure:
                         (None if sb_res.id[2] == " " else sb_res.id[2]),
                         sbric.lc,
                     )
+                    sbcic.ordered_aa_ic_list.append(sbric)
 
                     # update AtomKeys w/o IC_Residue references, in case
                     # chain ends before di/hedra sees them (2XHE test case)
@@ -289,6 +315,10 @@ def read_PIC(file: TextIO, verbose: bool = False) -> Structure:
                         m.group("elm").strip(),
                     )
 
+                    pr = (
+                        []
+                    )  # reset because prev does not link to this residue (chainBreak)
+
                     # print('atom: ', m.groupdict())
                 # elif verbose:
                 #     print("Reading pic file", file, "ATOM parse fail:", aline)
@@ -321,7 +351,8 @@ def read_PIC(file: TextIO, verbose: bool = False) -> Structure:
                             hl12[ek] = float(m["len12"])
                             ha[ek] = float(m["angle"])
                             hl23[ek] = float(m["len23"])
-                            sbcic.hedra[ek] = sbric.hedra[ek] = Hedron(ek)
+                            sbcic.hedra[ek] = sbric.hedra[ek] = h = Hedron(ek)
+                            h.cic = sbcic
                         else:
                             ek = (
                                 akcache(m["a1"]),
@@ -330,9 +361,11 @@ def read_PIC(file: TextIO, verbose: bool = False) -> Structure:
                                 akcache(m["a4"]),
                             )
                             da[ek] = float(m["dihedral"])
-                            sbcic.dihedra[ek] = sbric.dihedra[ek] = Dihedron(ek)
+                            sbcic.dihedra[ek] = sbric.dihedra[ek] = d = Dihedron(ek)
+                            d.cic = sbcic
                         for ak in ek:
                             if ak.ric is None:
+                                sbcic.akset.add(ak)
                                 if ak.akl[0:3] == rkl:
                                     ak.ric = sbric
                                     sbric.ak_set.add(ak)
