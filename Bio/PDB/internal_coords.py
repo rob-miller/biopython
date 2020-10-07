@@ -546,7 +546,7 @@ class IC_Chain:
         """Build chain level hedra and dihedra arrays."""
         # dihedra coord space
         self.dCoordSpace: np.ndarray = np.empty(
-            (self.dihedraLen, 2, 4, 4), dtype=np.float64
+            (2, self.dihedraLen, 4, 4), dtype=np.float64
         )
         self.dcsValid: np.ndarray = np.zeros((self.dihedraLen), dtype=np.bool)
 
@@ -721,6 +721,9 @@ class IC_Chain:
         atomArrayValid = self.atomArrayValid  # 2000
         # complete array of dihedra atoms
         dAtoms = self.dAtoms  # 2117 x [4][4] float
+        # coordinate space transformations optionally supplied
+        dCoordSpace1 = self.dCoordSpace[1]
+        dcsValid = self.dcsValid
 
         # dSet is 4-atom arrays for every dihedral, multiple copies of
         # many atoms as the dihedra overlap
@@ -730,7 +733,7 @@ class IC_Chain:
 
         # clear any transforms for dihedrals with outdated atoms
         workSelector = (dSetValid == self.dihedraOK).all(axis=1)
-        self.dcsValid[np.logical_not(workSelector)] = False
+        # self.dcsValid[np.logical_not(workSelector)] = False
 
         if verbose:
             dihedraWrk = workSelector.size - workSelector.sum()
@@ -750,12 +753,16 @@ class IC_Chain:
             updateMap = d2a_map[workNdxs, 3][0]
 
             # get all coordSpace transforms
-            cspace = multi_coord_space(workSet, np.sum(workSelector), True)
+            if np.all(dcsValid[workSelector]):
+                cspace = dCoordSpace1[workSelector]
+            else:
+                cspace = multi_coord_space(workSet, np.sum(workSelector), True)[1]
+            # foo = self.dCoordSpace[1][workSelector]
 
             # generate new coords for 4th atoms in workSet dihedra
             initCoords = dAtoms[workSelector].reshape(-1, 4, 4)
             atomArray[updateMap] = np.round(
-                np.einsum("ijk,ik->ij", cspace[1], initCoords[:, 3]), 3
+                np.einsum("ijk,ik->ij", cspace, initCoords[:, 3]), 3
             )  # must round to PDB resolution here or get coordinate drift along chain
 
             # mark new computed atom positions as valid
@@ -962,7 +969,7 @@ class IC_Chain:
         self.dAtoms[:, :, 3] = 1.0  # homogeneous
 
         self.dCoordSpace: np.ndarray = np.empty(
-            (self.dihedraLen, 2, 4, 4), dtype=np.float64
+            (2, self.dihedraLen, 4, 4), dtype=np.float64
         )
 
         self.dcsValid: np.ndarray = np.zeros((self.dihedraLen), dtype=np.bool)
@@ -1126,6 +1133,7 @@ class IC_Chain:
         :param workSelector numpy bool array: default None = update as needed
             mask to select dihedra for update
         """
+        # rtm axes wrong
         if workSelector is None:
             self.ar2()  # ensure atoms updated, fast if nothing to do
             workSelector = np.logical_not(self.dcsValid)
@@ -1228,7 +1236,7 @@ class IC_Chain:
             return  # escape on no data to process
         hedraAtomDict = {}
         dihedraAtomDict = {}
-        hInDset = set()
+        hInDset = set()  # rtm
         hedraDict2 = {}
         gCBdihedra = set()
 
@@ -1259,6 +1267,7 @@ class IC_Chain:
         self.hedraAngle = np.empty((self.hedraLen), dtype=np.float64)
         self.hedraL23 = np.empty((self.hedraLen), dtype=np.float64)
 
+        # self.hedraNdx = dict(zip(sorted(self.hedra.keys()), range(len(self.hedra))))
         self.hedraNdx = dict(zip(self.hedra.keys(), range(len(self.hedra))))
 
         # dihedra
@@ -1266,7 +1275,8 @@ class IC_Chain:
         self.dihedraAngle = np.empty(self.dihedraLen)
         self.dihedraAngleRads = np.empty(self.dihedraLen)
 
-        self.dihedraNdx = dict(zip(self.dihedra.keys(), range(self.dihedraLen)))
+        self.dihedraNdx = dict(zip(sorted(self.dihedra.keys()), range(self.dihedraLen)))
+        # self.dihedraNdx = dict(zip(self.dihedra.keys(), range(self.dihedraLen)))
 
         self.build_edraArrays()
         # rtm think good to here
@@ -1384,10 +1394,12 @@ class IC_Chain:
         # )
 
         # develop coord_space matrix for 1st 3 atoms of dihedra:
-        mt = multi_coord_space(dha, self.dihedraLen, False)
+        # mt = multi_coord_space(dha, self.dihedraLen, False)
+        self.dCoordSpace = multi_coord_space(dha, self.dihedraLen, True)
+        self.dcsValid[:] = True
 
         # now put atom 4 into that coordinate space and read dihedral as azimuth
-        do4 = np.matmul(mt, dha[:, 3].reshape(-1, 4, 1)).reshape(-1, 4)
+        do4 = np.matmul(self.dCoordSpace[0], dha[:, 3].reshape(-1, 4, 1)).reshape(-1, 4)
 
         np.arctan2(do4[:, 1], do4[:, 0], out=self.dihedraAngleRads)
         np.rad2deg(self.dihedraAngleRads, out=self.dihedraAngle)
