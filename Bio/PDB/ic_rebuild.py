@@ -37,13 +37,18 @@ from Bio.PDB.Chain import Chain
 from Bio.PDB.Entity import Entity
 
 
-def structure_rebuild_test(entity, verbose: bool = False) -> Dict:
+def structure_rebuild_test(
+    entity, verbose: bool = False, copyCoords: bool = False
+) -> Dict:
     """Test rebuild PDB structure from internal coordinates.
 
     :param entity: Biopython Structure, Model or Chain
         Structure to test
-    :param verbose: bool
+    :param verbose: bool default False
         print extra messages
+    :param copyCoords: bool default False
+        use coordinate space matrices from atom_to_internal_coords
+        in internal_to_atom_coords computation
     :returns: dict
         comparison dict from compare_residues()
     """
@@ -54,6 +59,19 @@ def structure_rebuild_test(entity, verbose: bool = False) -> Dict:
     pdb2 = read_PIC(sp)
     if verbose:
         report_IC(pdb2, verbose=True)
+
+    if copyCoords:
+        try:
+            csic = entity.internal_coord  # entity is chain
+            ctic = next(pdb2.get_chains()).internal_coord  # only 1 to get
+            ctic.dCoordSpace = csic.dCoordSpace
+            ctic.dcsValid = csic.dcsValid
+        except AttributeError:
+            for cSrc, cTst in zip(entity.get_chains(), pdb2.get_chains()):
+                ctic, csic = cTst.internal_coord, cSrc.internal_coord
+                ctic.dCoordSpace = csic.dCoordSpace
+                ctic.dcsValid = csic.dcsValid
+
     pdb2.internal_to_atom_coordinates(verbose)
     r = compare_residues(entity, pdb2, verbose=verbose)
     return r
