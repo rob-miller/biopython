@@ -290,6 +290,8 @@ ic_data_sidechains = {
         ("CA", "CB", "CG", "OD1", "chi2"),  # chi2
         ("CB", "CG", "OD2"),
         ("CA", "CB", "CG", "OD2"),
+        ("CG", "OD2", "HD2"),
+        ("CB", "CG", "OD2", "HD2"),
     ),
     "E": (
         ("CA", "CB", "CG"),
@@ -304,6 +306,8 @@ ic_data_sidechains = {
         ("CB", "CG", "HG3"),
         ("CA", "CB", "CG", "HG2"),
         ("CA", "CB", "CG", "HG3"),
+        ("CD", "OE2", "HE2"),
+        ("CG", "CD", "OE2", "HE2"),
     ),
     "H": (
         ("CA", "CB", "CG"),
