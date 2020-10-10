@@ -518,7 +518,10 @@ class IC_Chain:
 
         def setAtom(res, atm):
             ak = AtomKey(res.internal_coord, atm)
-            ndx = self.atomArrayIndex[ak]
+            try:
+                ndx = self.atomArrayIndex[ak]
+            except KeyError:
+                return
             self.atomArray[ndx, 0:3] = atm.coord
             atm.coord = self.atomArray[ndx, 0:3]  # make view on atomArray
             self.atomArrayValid[ndx] = True
@@ -1018,6 +1021,14 @@ class IC_Chain:
                 self.hAtoms_needs_update[self.dH2ndx]
             )
 
+        # dihedra full size masks:
+        mdFwd = self.dFwd & self.dAtoms_needs_update
+        mdRev = self.dRev & self.dAtoms_needs_update
+
+        # update size masks
+        udFwd = self.dFwd[self.dAtoms_needs_update]
+        udRev = self.dRev[self.dAtoms_needs_update]
+
         if np.any(self.hAtoms_needs_update):
             # hedra inital coords
 
@@ -1063,67 +1074,55 @@ class IC_Chain:
 
             self.hAtoms_needs_update[...] = False
 
-        # dihedra initial coords
+            # dihedra parts other than dihedral angle
 
-        dhlen = np.sum(self.dAtoms_needs_update)  # self.dihedraLen
+            dhlen = np.sum(self.dAtoms_needs_update)  # self.dihedraLen
 
-        # full size masks:
-        mdFwd = self.dFwd & self.dAtoms_needs_update
-        mdRev = self.dRev & self.dAtoms_needs_update
+            # only 4th atom takes work:
+            # pick 4th atom based on rev flag
+            self.a4_pre_rotation[mdRev] = self.hAtoms[self.dH2ndx, 0][mdRev]
+            self.a4_pre_rotation[mdFwd] = self.hAtomsR[self.dH2ndx, 2][mdFwd]
 
-        # update size masks
-        udFwd = self.dFwd[self.dAtoms_needs_update]
-        udRev = self.dRev[self.dAtoms_needs_update]
+            # numpy multiply, add operations below intermediate array but out= not
+            # working with masking:
+            self.a4_pre_rotation[:, 2][self.dAtoms_needs_update] = np.multiply(
+                self.a4_pre_rotation[:, 2][self.dAtoms_needs_update], -1
+            )  # a4 to +Z
 
-        # only 4th atom takes work:
-        # pick 4th atom based on rev flag
-        self.a4_pre_rotation[mdRev] = self.hAtoms[self.dH2ndx, 0][mdRev]
-        self.a4_pre_rotation[mdFwd] = self.hAtomsR[self.dH2ndx, 2][mdFwd]
+            a4shift = np.empty(dhlen)
+            a4shift[udRev] = self.hedraL23[self.dH2ndx][mdRev]  # len23
+            a4shift[udFwd] = self.hedraL12[self.dH2ndx][mdFwd]  # len12
 
-        # numpy multiply, add operations below intermediate array but out= not
-        # working with masking:
-        self.a4_pre_rotation[:, 2][self.dAtoms_needs_update] = np.multiply(
-            self.a4_pre_rotation[:, 2][self.dAtoms_needs_update], -1
-        )  # a4 to +Z
+            self.a4_pre_rotation[:, 2][self.dAtoms_needs_update] = np.add(
+                self.a4_pre_rotation[:, 2][self.dAtoms_needs_update], a4shift,
+            )  # so a2 at origin
 
-        a4shift = np.empty(dhlen)
-        a4shift[udRev] = self.hedraL23[self.dH2ndx][mdRev]  # len23
-        a4shift[udFwd] = self.hedraL12[self.dH2ndx][mdFwd]  # len12
+            # now build dihedra initial coords
 
-        self.a4_pre_rotation[:, 2][self.dAtoms_needs_update] = np.add(
-            self.a4_pre_rotation[:, 2][self.dAtoms_needs_update], a4shift,
-        )  # so a2 at origin
+            dH1atoms = self.hAtoms[self.dH1ndx]  # fancy indexing so
+            dH1atomsR = self.hAtomsR[self.dH1ndx]  # these copy not view
+
+            self.dAtoms[:, :3][mdFwd] = dH1atoms[mdFwd]
+            # self.dAtoms[:, 3][mdFwd] = a4rot[udFwd]  # [self.dFwd]
+
+            self.dAtoms[:, :3][mdRev] = dH1atomsR[:, 2::-1][mdRev]
+            # self.dAtoms[:, 3][mdRev] = a4rot[udRev]  # [self.dRev]
+
+            # self.dAtoms_needs_update[...] = False
 
         # build rz rotation matrix for dihedral angle
         rz = multi_rot_Z(self.dihedraAngleRads[self.dAtoms_needs_update])
 
-        # p = np.matmul(mt, dha[:, 0].reshape(-1, 4, 1)).reshape(-1, 4)
         a4rot = np.matmul(
             rz, self.a4_pre_rotation[self.dAtoms_needs_update][:].reshape(-1, 4, 1)
         ).reshape(-1, 4)
-        # a4rot = rz.dot(self.a4_pre_rotation) # np.matmul(self.a4_pre_rotation, rz)
 
-        # now build dihedra initial coords
-
-        dH1atoms = self.hAtoms[self.dH1ndx]  # fancy indexing so
-        dH1atomsR = self.hAtomsR[self.dH1ndx]  # these copy not view
-
-        self.dAtoms[:, :3][mdFwd] = dH1atoms[mdFwd]
         self.dAtoms[:, 3][mdFwd] = a4rot[udFwd]  # [self.dFwd]
 
-        self.dAtoms[:, :3][mdRev] = dH1atomsR[:, 2::-1][mdRev]
+        # self.dAtoms[:, :3][mdRev] = dH1atomsR[:, 2::-1][mdRev]
         self.dAtoms[:, 3][mdRev] = a4rot[udRev]  # [self.dRev]
 
         self.dAtoms_needs_update[...] = False
-
-        # rtm:BpAtmVw
-        # set all ric.atom_coords to be views on chain atomArray
-        # also done at end of IC_Chain.write_SCAD()
-
-        # not needed with new vectorise - rtm
-        # for ric in self.ordered_aa_ic_list:
-        #    for ak in ric.ak_set:
-        #        ric.atom_coords[ak] = self.atomArray[self.atomArrayIndex[ak]]
 
     def update_dCoordSpace(self, workSelector: Optional[np.ndarray] = None) -> None:
         """Compute/update multiple coordinate space transforms for chain dihedra.
@@ -2191,6 +2190,7 @@ class IC_Residue:
     @staticmethod
     def atm241(coord: np.array) -> np.array:
         """Convert 1x3 cartesian coordinates to 1x4 homogeneous coordinates."""
+        print("ATM241")
         arr41 = np.empty(4)
         arr41[0:3] = coord
         arr41[3] = 1.0
@@ -2201,10 +2201,11 @@ class IC_Residue:
 
         Arbitrarily renames O' and O'' to O and OXT
         """
-        if "O'" == atm.name:
-            atm.name = "O"
-        if "O''" == atm.name:
-            atm.name = "OXT"
+        if "O" == atm.name[0]:
+            if "O'" == atm.name:
+                atm.name = "O"
+            elif "O''" == atm.name:
+                atm.name = "OXT"
 
         if atm.name not in self.accept_atoms:
             # print('skip:', atm.name)
