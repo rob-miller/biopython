@@ -1847,7 +1847,7 @@ class IC_Residue:
     isAccept: bool
         True if is20AA or in accept_resnames below
     accept_atoms: tuple
-        list of PDB atom names to use when generatiing internal coordinates.
+        list of PDB atom names to use when generating internal coordinates.
         Default is:
 
         `accept_atoms = accept_mainchain + accept_hydrogens`
@@ -1857,13 +1857,22 @@ class IC_Residue:
 
         `IC_Residue.accept_atoms = IC_Residue.accept_mainchain`
 
-        to get only backbone atoms plus amide proton, use:
+        to get only mainchain atoms plus amide proton, use:
 
         `IC_Residue.accept_atoms = IC_Residue.accept_mainchain + ('H',)`
 
         to convert D atoms to H, set `AtomKey.d2h = True` and use:
 
         `IC_Residue.accept_atoms = accept_mainchain + accept_hydrogens + accept_deuteriums`
+
+        Note that accept_mainchain = accept_backbone + accept_sidechain.  Thus
+        to generate sequence-agnostic conformational data for e.g. structure
+        alignment in dihedral angle space, use:
+        `IC_Residue.accept_atoms = accept_backbone`
+
+        or set gly_Cbeta = True and use:
+
+        `IC_Residue.accept_atoms = accept_backbone + ('CB',)`
 
         There is currently no option to output internal coordinates with D
         instead of H
@@ -2044,11 +2053,14 @@ class IC_Residue:
             if self.akc.get(atmName) is None:
                 self.akc[atmName] = ak
 
-    accept_mainchain = (
+    accept_backbone = (
         "N",
         "CA",
         "C",
         "O",
+        "OXT",
+    )
+    accept_sidechain = (
         "CB",
         "CG",
         "CG1",
@@ -2079,8 +2091,10 @@ class IC_Residue:
         "OD2",
         "OH",
         "CH2",
-        "OXT",
     )
+
+    accept_mainchain = accept_backbone + accept_sidechain
+
     accept_hydrogens = (
         "H",
         "H1",
@@ -3101,6 +3115,7 @@ class IC_Residue:
             return None
         return rval
 
+    # @profile
     def pick_angle(
         self, angle_key: Union[EKT, str]
     ) -> Optional[Union["Hedron", "Dihedron"]]:
@@ -3198,12 +3213,17 @@ class IC_Residue:
             sclist = ic_data_sidechains.get(self.lc, None)
             if sclist is None:
                 return None
-            for akl in sclist:
-                if 5 == len(akl):
-                    if akl[4] == angle_key:
-                        klst = [self.rak(a) for a in akl[0:4]]
-                        tklst = cast(DKT, tuple(klst))
-                        rval = self.dihedra.get(tklst, None)
+            ndx = (2 * int(angle_key[-1])) - 1
+            try:
+                akl = sclist[ndx]
+                if akl[4] == angle_key:
+                    klst = [self.rak(a) for a in akl[0:4]]
+                    tklst = cast(DKT, tuple(klst))
+                    rval = self.dihedra.get(tklst, None)
+                else:
+                    return None
+            except IndexError:
+                return None
 
         return rval
 
