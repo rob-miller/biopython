@@ -29,7 +29,7 @@ from Bio.PDB.internal_coords import IC_Residue, IC_Chain
 from Bio.PDB.PICIO import write_PIC, read_PIC, enumerate_atoms, pdb_date
 
 # for typing
-from typing import Dict, Union, Any
+from typing import Dict, Union, Any, Tuple
 from Bio.PDB.Atom import Atom
 from Bio.PDB.Residue import Residue, DisorderedResidue
 from Bio.PDB.Model import Model
@@ -205,6 +205,14 @@ def IC_duplicate(entity) -> Structure:
     return read_PIC(sp)
 
 
+def _atmfid_d2h(atm: Atom) -> Tuple:
+    afid = list(atm.get_full_id())
+    afid4 = list(afid[4])
+    afid40 = re.sub("D", "H", afid4[0], count=1)
+    new_afid = (afid[0], afid[1], afid[2], afid[3], (afid40, afid4[1]))
+    return tuple(new_afid)
+
+
 def _cmp_atm(
     r0: Residue, r1: Residue, a0: Atom, a1: Atom, verbose: bool, cmpdict: Dict
 ) -> None:
@@ -216,7 +224,7 @@ def _cmp_atm(
         if verbose:
             print(r0.get_full_id(), a0.get_full_id(), a0.parent.resname, "!= None")
     else:
-        if a0.get_full_id() == a1.get_full_id():
+        if a0.get_full_id() == a1.get_full_id() or _atmfid_d2h(a0) == a1.get_full_id():
             cmpdict["aFullIdMatchCount"] += 1
         elif verbose:
             print(
@@ -228,7 +236,7 @@ def _cmp_atm(
             )
         a0c = a0.get_coord()
         a1c = a1.get_coord()
-        if numpy.allclose(a0c, a1c, rtol=1e-05, atol=1e-08):
+        if numpy.allclose(a0c, a1c, rtol=1e-03, atol=1e-05):
             cmpdict["aCoordMatchCount"] += 1
         elif verbose:
             print(
