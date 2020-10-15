@@ -563,12 +563,15 @@ class IC_Chain:
         a2ha_map = {}
         # bond_map = {}
 
+        h2aa = [[] for _ in range(self.hedraLen)]
         for hk, hndx in self.hedraNdx.items():
             hstep = hndx * 3
             for i in range(3):
                 ndx = self.atomArrayIndex[hk[i]]
                 a2ha_map[hstep + i] = ndx
             self.hedra[hk].ndx = hndx
+            for ak in self.hedra[hk].aks:
+                h2aa[hndx].append(self.atomArrayIndex[ak])
             # a, b, c = hk[:]
             # j, k, l = a2ha_map[hstep : hstep + 3]
             # t0 = ((a, b) if (a <= b) else (b, a))
@@ -578,6 +581,7 @@ class IC_Chain:
             # bond_map[t1] = (k, l)
             # bond_map[t2] = (j, l)
         self.a2ha_map = np.array(tuple(a2ha_map.values()))
+        self.h2aa = np.array(h2aa)
 
         # dihedra atoms
         self.dAtoms: np.ndarray = np.empty((self.dihedraLen, 4, 4), dtype=np.float64)
@@ -593,6 +597,7 @@ class IC_Chain:
 
         self.dH1ndx = np.empty(self.dihedraLen, dtype=np.int)
         self.dH2ndx = np.empty(self.dihedraLen, dtype=np.int)
+        d2aa = [[] for _ in range(self.dihedraLen)]
         for dk, dndx in self.dihedraNdx.items():
             # build map between atomArray and dAtoms
             dstep = dndx * 4
@@ -609,10 +614,13 @@ class IC_Chain:
                 self.dH2ndx[dndx] = self.hedraNdx[dk[3:0:-1]]
                 self.dRev[dndx] = True
             self.dihedra[dk].ndx = dndx
+            for ak in self.dihedra[dk].aks:
+                d2aa[dndx].append(self.atomArrayIndex[ak])
 
         self.a2da_map = np.array(tuple(a2da_map.values()))
         self.d2a_map = self.a2da_map.reshape(-1, 4)
         self.dFwd = self.dRev != True  # noqa: E712
+        self.d2aa = np.array(d2aa)
 
         # manually create np.where(atom in dihedral)
         self.a2d_map = [(np.array(xi[0]), np.array(xi[1])) for xi in a2d_map]
@@ -719,9 +727,16 @@ class IC_Chain:
         # every dihedron atom to chain atoms
         d2a_map = self.d2a_map  # 2117 x [4] ints
         # all chain atoms
+        # rtm test code
+        # self.atomArrayValid[:] = False
+        # self.atomArrayValid[0:3] = True
         atomArray = self.atomArray  # 2000
         # bool markers for chain atoms with valid coordinates
         atomArrayValid = self.atomArrayValid  # 2000
+
+        # atomArrayValid[...] = False
+        # atomArrayValid[0:3] = True
+
         # complete array of dihedra atoms
         dAtoms = self.dAtoms  # 2117 x [4][4] float
         # coordinate space transformations optionally supplied
@@ -764,9 +779,12 @@ class IC_Chain:
 
             # generate new coords for 4th atoms in workSet dihedra
             initCoords = dAtoms[workSelector].reshape(-1, 4, 4)
-            atomArray[updateMap] = np.round(
-                np.einsum("ijk,ik->ij", cspace, initCoords[:, 3]), 3
-            )  # must round to PDB resolution here or get coordinate drift along chain
+            # atomArray[updateMap] = np.round(
+            #    np.einsum("ijk,ik->ij", cspace, initCoords[:, 3]), 3
+            # )  # must round to PDB resolution here or get coordinate drift along chain
+
+            # rtm temporary no rounding
+            atomArray[updateMap] = np.einsum("ijk,ik->ij", cspace, initCoords[:, 3])
 
             # mark new computed atom positions as valid
             atomArrayValid[updateMap] = True
@@ -782,6 +800,19 @@ class IC_Chain:
                 for d in adlist[0]:
                     dvalid = atomArrayValid[d2a_map[d]]
                     workSelector[d] = (dvalid == targ).all()
+                """
+                for d, p in zip(adlist[0], adlist[1]):
+                    if p != 3:  # if a is not atom4 for this d (that we just placed)
+                        atomArrayValid[
+                            d2a_map[d]
+                        ] = False  # then need to update rest in d
+                        atomArrayValid[a] = True
+                        atomArrayValid[updateMap] = True
+                    # dvalid = atomArrayValid[d2a_map[d]]
+                    # workSelector[d] = (dvalid == targ).all()
+                    dSetValid = atomArrayValid[a2da_map].reshape(-1, 4)
+                    workSelector = (dSetValid == targ).all(axis=1)
+                """
 
             loopCount += 1
 
@@ -1020,6 +1051,7 @@ class IC_Chain:
             self.dAtoms_needs_update |= (self.hAtoms_needs_update[self.dH1ndx]) | (
                 self.hAtoms_needs_update[self.dH2ndx]
             )
+            self.dcsValid &= np.logical_not(self.dAtoms_needs_update)
 
         # dihedra full size masks:
         mdFwd = self.dFwd & self.dAtoms_needs_update
@@ -1118,7 +1150,6 @@ class IC_Chain:
         ).reshape(-1, 4)
 
         self.dAtoms[:, 3][mdFwd] = a4rot[udFwd]  # [self.dFwd]
-
         # self.dAtoms[:, :3][mdRev] = dH1atomsR[:, 2::-1][mdRev]
         self.dAtoms[:, 3][mdRev] = a4rot[udRev]  # [self.dRev]
 
@@ -1170,6 +1201,8 @@ class IC_Chain:
         #            print(f"no assembly for {ric} due to missing N, Ca and/or C atoms")
 
         self.init_atom_coords()  # compute initial di/hedra coords
+        # rtm self.atomArrayValid[...] = False
+        # self.atomArrayValid[0:3] = True
         if IC_Chain.ParallelAssembleResidues:
             self.ar2(verbose=verbose)  # transform init di/hedra to chain coord space
 
@@ -1242,7 +1275,8 @@ class IC_Chain:
         for ric in self.ordered_aa_ic_list:
             ric.atom_to_internal_coordinates(verbose=verbose)  # builds di/hedra objects
 
-        self.build_atomArray()  # ric.a2ic added gly CBs to akset
+        if not hasattr(self, "atomArrayValid"):
+            self.build_atomArray()  # ric.a2ic added gly CBs to akset
 
         # if added Gly C-betas when building di/hedra residue objects, now need
         # to add additional atoms to the chain level numpy arrays
@@ -1277,7 +1311,8 @@ class IC_Chain:
         self.dihedraNdx = dict(zip(sorted(self.dihedra.keys()), range(self.dihedraLen)))
         # self.dihedraNdx = dict(zip(self.dihedra.keys(), range(self.dihedraLen)))
 
-        self.build_edraArrays()
+        if not hasattr(self, "hAtoms_needs_update"):
+            self.build_edraArrays()
         # rtm think good to here
 
         # rtm skip this
@@ -3894,7 +3929,8 @@ class Dihedron(Edron):
         in some PDB file residues, which means the sidechain cannot be
         placed.  The alternate CB path (i-1)C-N-CA-CB is provided to
         circumvent this, but if this is needed then it must be adjusted in
-        conjunction with PHI ((i-1)C-N-CA-C) as they overlap.
+        conjunction with PHI ((i-1)C-N-CA-C) as they overlap. **So if you
+        change one of these angles you need to change the other yourself.**
 
         :param dangle_deg: float new dihedral angle in degrees
         """
