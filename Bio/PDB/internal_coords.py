@@ -544,6 +544,8 @@ class IC_Chain:
 
         for ric in self.ordered_aa_ic_list:
             setResAtms(ric.residue)
+            if ric.akc == {}:  # pic file read
+                ric.build_rak_cache()
 
     def build_edraArrays(self) -> None:
         """Build chain level hedra and dihedra arrays."""
@@ -687,6 +689,9 @@ class IC_Chain:
                 bpAtm.set_bfactor(bfac)
                 bpAtm.set_occupancy(occ)
                 sn = bpAtm.get_serial_number()
+
+            # pass
+            # ak.ric.akc[bpAtm] = ak
 
         # hedra
         self.hedraLen = len(ha)
@@ -3828,6 +3833,7 @@ class Dihedron(Edron):
         # if "dihedral" in kwargs:
         #    self.angle = float(kwargs["dihedral"])
 
+    """
     def __deepcopy__(self, memo):
         existing = memo.get(id(self), False)
         if existing:
@@ -3846,6 +3852,8 @@ class Dihedron(Edron):
         dup.id3 = copy.deepcopy(self.id3, memo)
         dup.id32 = copy.deepcopy(self.id32, memo)
         # still need to update: hedron1,2, h1,2key, id3,2
+        return dup
+    """
 
     def __repr__(self) -> str:
         """Print string for Dihedron object."""
