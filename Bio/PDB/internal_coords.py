@@ -563,6 +563,7 @@ class IC_Chain:
 
         # maps between hAtoms and atomArray
         a2ha_map = {}
+        self.a2h_map = [[] for _ in range(len(self.akset))]
         # bond_map = {}
 
         h2aa = [[] for _ in range(self.hedraLen)]
@@ -573,7 +574,9 @@ class IC_Chain:
                 a2ha_map[hstep + i] = ndx
             self.hedra[hk].ndx = hndx
             for ak in self.hedra[hk].aks:
-                h2aa[hndx].append(self.atomArrayIndex[ak])
+                akndx = self.atomArrayIndex[ak]
+                h2aa[hndx].append(akndx)
+                self.a2h_map[akndx].append(hndx)
             # a, b, c = hk[:]
             # j, k, l = a2ha_map[hstep : hstep + 3]
             # t0 = ((a, b) if (a <= b) else (b, a))
@@ -599,6 +602,7 @@ class IC_Chain:
 
         self.dH1ndx = np.empty(self.dihedraLen, dtype=np.int)
         self.dH2ndx = np.empty(self.dihedraLen, dtype=np.int)
+        self.h1d_map = [[] for _ in range(self.hedraLen)]
         d2aa = [[] for _ in range(self.dihedraLen)]
         for dk, dndx in self.dihedraNdx.items():
             # build map between atomArray and dAtoms
@@ -609,12 +613,16 @@ class IC_Chain:
                 a2d_map[ndx][0].append(dndx)
                 a2d_map[ndx][1].append(i)
             try:
-                self.dH1ndx[dndx] = self.hedraNdx[dk[0:3]]
+                h1ndx = self.hedraNdx[dk[0:3]]
+                self.dH1ndx[dndx] = h1ndx
                 self.dH2ndx[dndx] = self.hedraNdx[dk[1:4]]
+                self.h1d_map[h1ndx].append(dndx)
             except KeyError:
-                self.dH1ndx[dndx] = self.hedraNdx[dk[2::-1]]
+                h1ndx = self.hedraNdx[dk[2::-1]]
+                self.dH1ndx[dndx] = h1ndx
                 self.dH2ndx[dndx] = self.hedraNdx[dk[3:0:-1]]
                 self.dRev[dndx] = True
+                self.h1d_map[h1ndx].append(dndx)
             self.dihedra[dk].ndx = dndx
             for ak in self.dihedra[dk].aks:
                 d2aa[dndx].append(self.atomArrayIndex[ak])
@@ -739,8 +747,19 @@ class IC_Chain:
         # bool markers for chain atoms with valid coordinates
         atomArrayValid = self.atomArrayValid  # 2000
 
+        """ """
+        # rtm
         # atomArrayValid[...] = False
         # atomArrayValid[0:3] = True
+        """
+        atomArray[3:2000] = [
+            0,
+            0,
+            0,
+            1,
+        ]  # np.zeros((len(self.akset), 4), dtype=np.float64)
+        # atomArray[:, 3] = 1.0
+        """
 
         # complete array of dihedra atoms
         dAtoms = self.dAtoms  # 2117 x [4][4] float
@@ -756,7 +775,7 @@ class IC_Chain:
 
         # clear any transforms for dihedrals with outdated atoms
         workSelector = (dSetValid == self.dihedraOK).all(axis=1)
-        # self.dcsValid[np.logical_not(workSelector)] = False
+        self.dcsValid[np.logical_not(workSelector)] = False
 
         if verbose:
             dihedraWrk = workSelector.size - workSelector.sum()
@@ -1177,6 +1196,28 @@ class IC_Chain:
         self.dCoordSpace[workSelector] = np.swapaxes(cspace, 0, 1)
         self.dcsValid[workSelector] = True
 
+    def propagate_changes(self) -> None:
+        """Track through di/hedra to invalidate dependent atoms."""
+        invalid_atoms = np.logical_not(self.atomArrayValid)
+        invalid_atom_ndxs = np.where(invalid_atoms)[0]
+        affected_hedra = set()
+        for a in invalid_atom_ndxs:
+            affected_hedra.update(self.a2h_map[a])
+        ahl = len(affected_hedra)
+        ahl = ahl - 1
+        newah = affected_hedra
+        while ahl != len(affected_hedra):
+            newdh = set()
+            for h in newah:
+                newdh.update(self.h1d_map[h])
+            newah = set()
+            for dh in newdh:
+                newah.add(self.dH2ndx[dh])
+            ahl = len(affected_hedra)
+            affected_hedra.update(newah)
+        for h in affected_hedra:
+            self.atomArrayValid[self.h2aa[h]] = False
+
     # @profile
     def internal_to_atom_coordinates(
         self, verbose: bool = False, promote: Optional[bool] = True,
@@ -1204,6 +1245,9 @@ class IC_Chain:
         #    for ric in self.ordered_aa_ic_list:
         #        if not hasattr(ric, "NCaCKey"):
         #            print(f"no assembly for {ric} due to missing N, Ca and/or C atoms")
+
+        if IC_Chain.ParallelAssembleResidues:
+            self.propagate_changes()
 
         self.init_atom_coords()  # compute initial di/hedra coords
         # rtm self.atomArrayValid[...] = False
@@ -3951,6 +3995,7 @@ class Dihedron(Edron):
             cic.dihedraAngleRads[dndx] = np.deg2rad(dangle_deg)
             cic.dAtoms_needs_update[dndx] = True
             cic.atomArrayValid[cic.atomArrayIndex[self.aks[3]]] = False
+
         except AttributeError:
             pass
 
