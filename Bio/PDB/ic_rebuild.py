@@ -234,9 +234,10 @@ def _cmp_atm(
                 "!=",
                 a1.get_full_id(),
             )
-        a0c = a0.get_coord()
-        a1c = a1.get_coord()
-        if numpy.allclose(a0c, a1c, rtol=1e-03, atol=1e-05):
+        a0c = numpy.round(a0.get_coord(), 3)
+        a1c = numpy.round(a1.get_coord(), 3)
+        # if numpy.allclose(a0c, a1c, rtol=1e-03, atol=1e-05)
+        if numpy.array_equal(a0c, a1c):
             cmpdict["aCoordMatchCount"] += 1
         elif verbose:
             print(
