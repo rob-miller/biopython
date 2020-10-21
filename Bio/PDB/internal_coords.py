@@ -611,17 +611,20 @@ class IC_Chain:
         self.dH1ndx = np.empty(self.dihedraLen, dtype=np.int)
         self.dH2ndx = np.empty(self.dihedraLen, dtype=np.int)
         self.h1d_map = [[] for _ in range(self.hedraLen)]
+        # self.id3_dh_index = dict((k[0:3], []) for k in self.dihedraNdx.keys())
+        self.id3_dh_index = {k[0:3]: [] for k in self.dihedraNdx.keys()}
         d2aa = [[] for _ in range(self.dihedraLen)]
         for dk, dndx in self.dihedraNdx.items():
             # build map between atomArray and dAtoms
             dstep = dndx * 4
+            did3 = dk[0:3]
             for i in range(4):
                 ndx = self.atomArrayIndex[dk[i]]
                 a2da_map[dstep + i] = ndx
                 a2d_map[ndx][0].append(dndx)
                 a2d_map[ndx][1].append(i)
             try:
-                h1ndx = self.hedraNdx[dk[0:3]]
+                h1ndx = self.hedraNdx[did3]
                 self.dH1ndx[dndx] = h1ndx
                 self.dH2ndx[dndx] = self.hedraNdx[dk[1:4]]
                 self.h1d_map[h1ndx].append(dndx)
@@ -634,6 +637,7 @@ class IC_Chain:
             self.dihedra[dk].ndx = dndx
             for ak in self.dihedra[dk].aks:
                 d2aa[dndx].append(self.atomArrayIndex[ak])
+            self.id3_dh_index[did3].append(dk)
 
         self.a2da_map = np.array(tuple(a2da_map.values()))
         self.d2a_map = self.a2da_map.reshape(-1, 4)
@@ -784,6 +788,9 @@ class IC_Chain:
         # coordinate space transformations optionally supplied
         dCoordSpace1 = self.dCoordSpace[1]
         dcsValid = self.dcsValid
+
+        # rtm foo = self.ordered_aa_ic_list[0].assemble()
+        # if
 
         # dSet is 4-atom arrays for every dihedral, multiple copies of
         # many atoms as the dihedra overlap
@@ -2405,7 +2412,9 @@ class IC_Residue:
         - form ak_set
         - set NCaCKey to be available AtomKeys
         """
+        # print("LINK_DIHEDRA")
         # rtm not called so far from new read_PIC
+        # called for loading PDB / atom coords
         id3i: Dict[HKT, List[Dihedron]] = {}
         for dh in self.dihedra.values():
             dh.ric = self  # each dihedron can find its IC_Residue
@@ -2472,14 +2481,16 @@ class IC_Residue:
     def default_startpos(self) -> Dict["AtomKey", np.array]:
         """Generate default N-Ca-C coordinates to build this residue from."""
         atomCoords = {}
-        dlist0 = [self.id3_dh_index.get(akl, None) for akl in sorted(self.NCaCKey)]
+        cic = self.cic
+        dlist0 = [cic.id3_dh_index.get(akl, None) for akl in sorted(self.NCaCKey)]
         dlist1 = [d for d in dlist0 if d is not None]
         # https://stackoverflow.com/questions/11264684/flatten-list-of-lists
-        dlist = [val for sublist in dlist1 for val in sublist]
+        dlist = [cic.dihedra[val] for sublist in dlist1 for val in sublist]
         # dlist = self.id3_dh_index[NCaCKey]
         for d in dlist:
             for i, a in enumerate(d.aks):
-                atomCoords[a] = d.initial_coords[i]
+                # atomCoords[a] = d.initial_coords[i]
+                atomCoords[a] = cic.dAtoms[d.ndx][i]
         # if "O" not in self.akc and "CB" in self.akc:
         #    # need CB coord if no O coord - handle alternate CB path
         #    # but not clear how to do this for default position
@@ -2583,9 +2594,10 @@ class IC_Residue:
         # debug statements below still useful, commented for performance
         # dbg = False
 
-        dcsValid = self.cic.dcsValid
-        aaValid = self.cic.atomArrayValid
-        aaNdx = self.cic.atomArrayIndex
+        cic = self.cic
+        dcsValid = cic.dcsValid
+        aaValid = cic.atomArrayValid
+        aaNdx = cic.atomArrayIndex
 
         NCaCKey = sorted(self.NCaCKey)
 
@@ -2624,7 +2636,7 @@ class IC_Residue:
             # if dbg:
             #    print("assemble loop start q=", q)
             h1k = cast(HKT, q.pop())
-            dihedra = self.id3_dh_index.get(h1k, None)
+            dihedraKeys = cic.id3_dh_index.get(h1k, None)
             # if dbg:
             #    print(
             #        "  h1k:",
@@ -2632,9 +2644,13 @@ class IC_Residue:
             #        "len dihedra: ",
             #        len(dihedra) if dihedra is not None else "None",
             #    )
-            if dihedra is not None:
-                for d in dihedra:
+            if dihedraKeys is not None:
+                for dk in dihedraKeys:
+                    d = cic.dihedra[dk]
+                    if not hasattr(d, "initial_coords"):
+                        d.initial_coords = cic.dAtoms[d.ndx]
                     if 4 == len(d.initial_coords) and d.initial_coords[3] is not None:
+                        # rtm this check does not work
                         # skip incomplete dihedron if don't have 4th atom due
                         # to missing input data
                         d_h2key = d.hedron2.aks
