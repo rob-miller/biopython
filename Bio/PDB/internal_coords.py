@@ -125,6 +125,7 @@ class IC_Chain:
         NCaCKeys start chain segments (first residue or after chain break).
         These 3 atoms define the coordinate space for a contiguous chain segment,
         as initially specified by PDB or mmCIF file.
+        rtm: list of tuple(N, Ca, C atomKeys)
 
     MaxPeptideBond: **Class** attribute to detect chain breaks.
         Override for fully contiguous chains with some very long bonds - e.g.
@@ -223,6 +224,8 @@ class IC_Chain:
         self.chain = parent
         self.ordered_aa_ic_list: List[IC_Residue] = []
         # self.initNCaC: Dict[Tuple[str], Dict["AtomKey", np.array]] = {}
+        self.initNCaCs = []
+
         self.sqMaxPeptideBond = IC_Chain.MaxPeptideBond * IC_Chain.MaxPeptideBond
         # need init here for _gen_edra():
         self.hedra = {}
@@ -249,6 +252,7 @@ class IC_Chain:
         # now have all res and ic_res but ic_res not complete
         dup.chain.child_list = copy.deepcopy(self.chain.child_list, memo)
         dup.akset = copy.deepcopy(self.akset, memo)
+        dup.aktuple = copy.deepcopy(self.aktuple, memo)
         # now have all ak w/.ric
         dup.ordered_aa_ic_list = copy.deepcopy(self.ordered_aa_ic_list, memo)
 
@@ -422,6 +426,7 @@ class IC_Chain:
                     f"chain break at {res.internal_coord.pretty_str()} due to {reason}"
                 )
             # initNCaC: Dict["AtomKey", np.array] = {}
+            initNCaC = []
             ric = res.internal_coord
             for atm in ("N", "CA", "C"):
                 bpAtm = res.child_dict[atm]
@@ -431,8 +436,10 @@ class IC_Chain:
                         # initNCaC[ak] = IC_Residue.atm241(altAtom.coord)
                 else:
                     ak = AtomKey(ric, bpAtm)
+                    initNCaC.append(ak)
                     # initNCaC[ak] = IC_Residue.atm241(bpAtm.coord)
             # self.initNCaC[ric.rbase] = initNCaC
+            self.initNCaCs.append(tuple(initNCaC))
             return True
         elif (
             0 == len(res.child_list)
@@ -484,6 +491,7 @@ class IC_Chain:
                 last_res = this_res
 
         self.akset = akset
+        self.aktuple = tuple(sorted(akset))
 
         # if last_ord_res != []:
         #    self.build_atomArray(akset) # do this after adding gcb's
@@ -534,12 +542,12 @@ class IC_Chain:
                 else:
                     setAtom(res, atm)
 
-        AAsiz = len(self.akset)
+        self.AAsiz = len(self.akset)
         # sorted(akset) needed here for pdb atom serial number and to maintain
         # consistency between a2ic and i2ac
-        self.atomArrayIndex = dict(zip(sorted(self.akset), range(AAsiz)))
-        self.atomArrayValid = np.zeros(AAsiz, dtype=bool)
-        self.atomArray = np.zeros((AAsiz, 4), dtype=np.float64)
+        self.atomArrayIndex = dict(zip(self.aktuple, range(self.AAsiz)))
+        self.atomArrayValid = np.zeros(self.AAsiz, dtype=bool)
+        self.atomArray = np.zeros((self.AAsiz, 4), dtype=np.float64)
         self.atomArray[:, 3] = 1.0
 
         for ric in self.ordered_aa_ic_list:
@@ -563,7 +571,7 @@ class IC_Chain:
 
         # maps between hAtoms and atomArray
         a2ha_map = {}
-        self.a2h_map = [[] for _ in range(len(self.akset))]
+        self.a2h_map = [[] for _ in range(self.AAsiz)]
         # bond_map = {}
 
         h2aa = [[] for _ in range(self.hedraLen)]
@@ -597,7 +605,7 @@ class IC_Chain:
         # hedra and dihedra
         # dihedra forward/reverse data
         a2da_map = {}
-        a2d_map = [[[], []] for _ in range(len(self.akset))]
+        a2d_map = [[[], []] for _ in range(self.AAsiz)]
         self.dRev: np.ndarray = np.zeros((self.dihedraLen), dtype=np.bool)
 
         self.dH1ndx = np.empty(self.dihedraLen, dtype=np.int)
@@ -646,6 +654,16 @@ class IC_Chain:
     ) -> None:
         """Generate chain numpy arrays from PICIO read_PIC() dicts."""
         # self.set_residues()
+
+        self.aktuple = tuple(sorted(self.akset))
+
+        for ric in self.ordered_aa_ic_list:
+            initNCaC = []
+            for atm in ric.residue.get_atoms():
+                if atm.coord is not None:
+                    initNCaC.append(AtomKey(ric, atm))
+            if initNCaC != []:
+                self.initNCaCs.append(tuple(initNCaC))
 
         # set any supplied coordinates from biopython atoms
         # just loaded pic file so only start/chain break residues
@@ -757,7 +775,7 @@ class IC_Chain:
             0,
             0,
             1,
-        ]  # np.zeros((len(self.akset), 4), dtype=np.float64)
+        ]  # np.zeros((self.AAsiz, 4), dtype=np.float64)
         # atomArray[:, 3] = 1.0
         """
 
@@ -1179,6 +1197,24 @@ class IC_Chain:
 
         self.dAtoms_needs_update[...] = False
 
+        # can't start assembly if initial NCaC is not valid, so copy from
+        # hAtoms if needed
+        # rtm sould be better to use coordspace if oiginal coords are non-zero
+        for iNCaC in self.initNCaCs:
+            invalid = False
+            for ak in iNCaC:
+                if not self.atomArrayValid[self.atomArrayIndex[ak]]:
+                    invalid = True
+                    break
+            if invalid:
+                hatoms = self.hAtoms[self.hedraNdx[iNCaC]]
+                for i in range(3):
+                    andx = self.atomArrayIndex[iNCaC[i]]
+                    self.atomArray[andx] = hatoms[i]
+                    self.atomArrayValid[andx] = True
+
+                # print(self.hedraNdx[iNCaC])
+
     def update_dCoordSpace(self, workSelector: Optional[np.ndarray] = None) -> None:
         """Compute/update multiple coordinate space transforms for chain dihedra.
 
@@ -1201,8 +1237,27 @@ class IC_Chain:
         invalid_atoms = np.logical_not(self.atomArrayValid)
         invalid_atom_ndxs = np.where(invalid_atoms)[0]
         affected_hedra = set()
-        for a in invalid_atom_ndxs:
-            affected_hedra.update(self.a2h_map[a])
+        atmNdx = AtomKey.fields.atm
+        posNdx = AtomKey.fields.respos
+        done = set()
+        for andx in invalid_atom_ndxs:
+            ak = self.aktuple[andx]
+            atm = ak.akl[atmNdx]
+            pos = ak.akl[posNdx]
+            if atm in ("N", "CA", "C"):
+                self.atomArrayValid[andx:] = False  # backbone moved so
+                return  # all subsequent moved and we are done
+            elif pos not in done and atm not in ("O", "H"):
+                # O and H are termini so ignore
+                for i in range(andx, self.AAsiz):
+                    if self.aktuple[i].akl[posNdx] == pos:
+                        self.atomArrayValid[i] = False
+                    else:
+                        break
+                done.add(pos)
+        """
+        rtm
+            affected_hedra.update(self.a2h_map[andx])
         ahl = len(affected_hedra)
         ahl = ahl - 1
         newah = affected_hedra
@@ -1217,6 +1272,7 @@ class IC_Chain:
             affected_hedra.update(newah)
         for h in affected_hedra:
             self.atomArrayValid[self.h2aa[h]] = False
+        """
 
     # @profile
     def internal_to_atom_coordinates(
@@ -3730,7 +3786,9 @@ class Hedron(Edron):
         """Set this hedron angle; sets needs_update."""
         # self.lal[1] = angle_deg  # view on chain numpy arrays
         self.cic.hedraAngle[self.ndx] = angle_deg
-        self._invalidate_atoms()
+        # self._invalidate_atoms()
+        self.cic.hAtoms_needs_update[self.ndx] = True
+        self.cic.atomArrayValid[self.cic.atomArrayIndex[self.aks[2]]] = False
 
     @property
     def len12(self):
@@ -3746,7 +3804,10 @@ class Hedron(Edron):
         """Set first length for Hedron; sets needs_update."""
         # self.lal[0]  # _len12 = len  # rtm
         self.cic.hedraL12[self.ndx] = len
-        self._invalidate_atoms()
+        # self._invalidate_atoms()
+        self.cic.hAtoms_needs_update[self.ndx] = True
+        self.cic.atomArrayValid[self.cic.atomArrayIndex[self.aks[1]]] = False
+        self.cic.atomArrayValid[self.cic.atomArrayIndex[self.aks[2]]] = False
 
     @property
     def len23(self) -> float:
@@ -3762,7 +3823,9 @@ class Hedron(Edron):
         """Set second length for Hedron; sets needs_update."""
         # self.lal[2] = len
         self.cic.hedraL23[self.ndx] = len
-        self._invalidate_atoms()
+        # self._invalidate_atoms()
+        self.cic.hAtoms_needs_update[self.ndx] = True
+        self.cic.atomArrayValid[self.cic.atomArrayIndex[self.aks[2]]] = False
 
     def get_length(self, ak_tpl: BKT) -> Optional[float]:
         """Get bond length for specified atom pair.
@@ -3971,7 +4034,7 @@ class Dihedron(Edron):
                 return 360.0  # error value without type hint hassles
 
     @angle.setter
-    def angle(self, dangle_deg: float) -> None:
+    def angle(self, dangle_deg_in: float) -> None:
         """Save new dihedral angle; sets needs_update.
 
         faster to modify IC_Chain level arrays directly.
@@ -3986,6 +4049,13 @@ class Dihedron(Edron):
 
         :param dangle_deg: float new dihedral angle in degrees
         """
+        if dangle_deg_in > 180.0:
+            dangle_deg = dangle_deg_in - 360.0
+        elif dangle_deg_in < -180.0:
+            dangle_deg = dangle_deg_in + 360.0
+        else:
+            dangle_deg = dangle_deg_in
+
         self._dihedral = dangle_deg
         self.needs_update = True
         try:
