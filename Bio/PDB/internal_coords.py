@@ -793,6 +793,7 @@ class IC_Chain:
 
         # clear any transforms for dihedrals with outdated atoms
         workSelector = (dSetValid == self.dihedraOK).all(axis=1)
+        # rtm this breaks rebuild-test copyCoordSpace
         self.dcsValid[np.logical_not(workSelector)] = False
 
         if verbose:
@@ -821,10 +822,11 @@ class IC_Chain:
 
             # generate new coords for 4th atoms in workSet dihedra
             initCoords = dAtoms[workSelector].reshape(-1, 4, 4)
-            # atomArray[updateMap] = np.round(
-            #    np.einsum("ijk,ik->ij", cspace, initCoords[:, 3]), 3
-            # )  # must round to PDB resolution here or get coordinate drift along chain
-
+            """
+            atomArray[updateMap] = np.round(
+                np.einsum("ijk,ik->ij", cspace, initCoords[:, 3]), 3
+            )  # must round to PDB resolution here or get coordinate drift along chain
+            """
             # rtm temporary no rounding
             atomArray[updateMap] = np.einsum("ijk,ik->ij", cspace, initCoords[:, 3])
 
