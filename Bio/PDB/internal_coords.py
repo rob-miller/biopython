@@ -618,24 +618,35 @@ class IC_Chain:
             # build map between atomArray and dAtoms
             dstep = dndx * 4
             did3 = dk[0:3]
+            d = self.dihedra[dk]
             for i in range(4):
                 ndx = self.atomArrayIndex[dk[i]]
                 a2da_map[dstep + i] = ndx
                 a2d_map[ndx][0].append(dndx)
                 a2d_map[ndx][1].append(i)
+
             try:
-                h1ndx = self.hedraNdx[did3]
-                self.dH1ndx[dndx] = h1ndx
-                self.dH2ndx[dndx] = self.hedraNdx[dk[1:4]]
-                self.h1d_map[h1ndx].append(dndx)
+                d.h1key = did3
+                d.h2key = dk[1:4]
+                h1ndx = self.hedraNdx[d.h1key]
             except KeyError:
-                h1ndx = self.hedraNdx[dk[2::-1]]
-                self.dH1ndx[dndx] = h1ndx
-                self.dH2ndx[dndx] = self.hedraNdx[dk[3:0:-1]]
+                d.h1key = dk[2::-1]
+                d.h2key = dk[3:0:-1]
+                h1ndx = self.hedraNdx[d.h1key]
                 self.dRev[dndx] = True
-                self.h1d_map[h1ndx].append(dndx)
-            self.dihedra[dk].ndx = dndx
-            for ak in self.dihedra[dk].aks:
+                d.reverse = True
+
+            h2ndx = self.hedraNdx[d.h2key]
+            d.hedron1 = self.hedra[d.h1key]
+            d.hedron2 = self.hedra[d.h2key]
+            self.dH1ndx[dndx] = h1ndx
+            self.dH2ndx[dndx] = h2ndx
+            self.h1d_map[h1ndx].append(dndx)
+
+            d.ndx = dndx
+            d.cst = self.dCoordSpace[0][dndx]
+            d.rcst = self.dCoordSpace[1][dndx]
+            for ak in d.aks:
                 d2aa[dndx].append(self.atomArrayIndex[ak])
             self.id3_dh_index[did3].append(dk)
 
@@ -656,18 +667,37 @@ class IC_Chain:
         da: Dict[str, float],
         bfacs: Dict[str, float],
     ) -> None:
-        """Generate chain numpy arrays from PICIO read_PIC() dicts."""
+        """Generate chain numpy arrays from PICIO read_PIC() dicts.
+
+        On entry chain internal_coord has ordered_aa_ic_list built, akset;
+        residues have rnext, rprev, ak_set and di/hedra dicts initialised.
+        Chain, residues do NOT have NCaC info, id3_dh_index
+        Di/hedra have cic, aks set
+        Dihedra do NOT have valid reverse flag, h1/2 info
+        """
         # self.set_residues()
 
         self.aktuple = tuple(sorted(self.akset))
 
         for ric in self.ordered_aa_ic_list:
+            # log chain starts - beginning and after breaks
+            # chain starts are only atom coords in pic files
+            # assume valid pic files with all 3 of N, Ca, C coords
             initNCaC = []
             for atm in ric.residue.get_atoms():
                 if atm.coord is not None:
                     initNCaC.append(AtomKey(ric, atm))
             if initNCaC != []:
                 self.initNCaCs.append(tuple(initNCaC))
+
+            # next residue NCaCKeys so can do per-residue assemble()
+            ric.NCaCKey = []
+            ric.NCaCKey.extend(
+                ric._split_akl(
+                    (AtomKey(ric, "N"), AtomKey(ric, "CA"), AtomKey(ric, "C"))
+                )
+            )
+            pass
 
         # set any supplied coordinates from biopython atoms
         # just loaded pic file so only start/chain break residues
@@ -789,7 +819,8 @@ class IC_Chain:
         dCoordSpace1 = self.dCoordSpace[1]
         dcsValid = self.dcsValid
 
-        # rtm foo = self.ordered_aa_ic_list[0].assemble()
+        # rtm
+        # foo = self.ordered_aa_ic_list[0].assemble()
         # if
 
         # dSet is 4-atom arrays for every dihedral, multiple copies of
@@ -1068,8 +1099,8 @@ class IC_Chain:
             d.ndx = dndx
             d.initial_coords = self.dAtoms[dndx]
             d.a4_pre_rotation = self.a4_pre_rotation[dndx]
-            d.cst = self.dCoordSpace[dndx][0]
-            d.rcst = self.dCoordSpace[dndx][1]
+            d.cst = self.dCoordSpace[0][dndx]
+            d.rcst = self.dCoordSpace[1][dndx]
             # build map between atomArray and dAtoms
             dstep = dndx * 4
             for i in range(4):
@@ -1208,13 +1239,12 @@ class IC_Chain:
 
         # can't start assembly if initial NCaC is not valid, so copy from
         # hAtoms if needed
-        # rtm sould be better to use coordspace if oiginal coords are non-zero
+        # rtm would be better to use coordspace if oiginal coords are non-zero
         for iNCaC in self.initNCaCs:
-            invalid = False
-            for ak in iNCaC:
-                if not self.atomArrayValid[self.atomArrayIndex[ak]]:
-                    invalid = True
-                    break
+            invalid = True
+            if np.all(self.atomArrayValid[[self.atomArrayIndex[ak] for ak in iNCaC]]):
+                invalid = False
+
             if invalid:
                 hatoms = self.hAtoms[self.hedraNdx[iNCaC]]
                 for i in range(3):
@@ -1237,8 +1267,11 @@ class IC_Chain:
             self.ar2()  # ensure atoms updated, fast if nothing to do
             workSelector = np.logical_not(self.dcsValid)
         workSet = self.dSet[workSelector]
-        cspace = multi_coord_space(workSet, np.sum(workSelector), True)
-        self.dCoordSpace[workSelector] = np.swapaxes(cspace, 0, 1)
+        self.dCoordSpace[:][workSelector] = multi_coord_space(
+            workSet, np.sum(workSelector), True
+        )
+        # cspace = multi_coord_space(workSet, np.sum(workSelector), True)
+        # self.dCoordSpace[workSelector] = np.swapaxes(cspace, 0, 1)
         self.dcsValid[workSelector] = True
 
     def propagate_changes(self) -> None:
@@ -2415,16 +2448,16 @@ class IC_Residue:
         # print("LINK_DIHEDRA")
         # rtm not called so far from new read_PIC
         # called for loading PDB / atom coords
-        id3i: Dict[HKT, List[Dihedron]] = {}
+        # id3i: Dict[HKT, List[Dihedron]] = {}
         for dh in self.dihedra.values():
             dh.ric = self  # each dihedron can find its IC_Residue
             dh.cic = self.cic  # each dihedron can update chain dihedral angles
-            id3 = dh.id3
-            if id3 not in id3i:
-                id3i[id3] = []
-            id3i[id3].append(dh)
+            # id3 = dh.id3
+            # if id3 not in id3i:
+            #    id3i[id3] = []
+            # id3i[id3].append(dh)
             self.ak_set.update(dh.aks)
-            dh.set_hedra()
+            # now in build_edraArrays rtm : dh.set_hedra()
         for h in self.hedra.values():  # collect any atoms in orphan hedra
             self.ak_set.update(h.aks)  # e.g. alternate CB path with no O
             h.cic = self.cic  # each hedron can update chain hedra
@@ -2437,9 +2470,17 @@ class IC_Residue:
             self.build_rak_cache()
 
         # initialise NCaCKey here:
+        # new version copy from hedraDict2Chain
+        self.NCaCKey = []
+        self.NCaCKey.extend(
+            self._split_akl(
+                (AtomKey(self, "N"), AtomKey(self, "CA"), AtomKey(self, "C"))
+            )
+        )
 
         # not rak here to avoid polluting akc cache with no-altloc keys
         # so starting with 'generic' key:
+        """
         self.NCaCKey = [(AtomKey(self, "N"), AtomKey(self, "CA"), AtomKey(self, "C"))]
 
         newNCaCKey: List[Tuple["AtomKey", ...]] = []
@@ -2456,6 +2497,7 @@ class IC_Residue:
                 print(
                     f"Missing N, Ca and/or C atoms for residue {str(self.residue)} chain {self.residue.parent.id}"
                 )
+        """
 
     def set_flexible(self) -> None:
         """For OpenSCAD, mark N-CA and CA-C bonds to be flexible joints."""
@@ -2500,9 +2542,9 @@ class IC_Residue:
     def get_startpos(self) -> Dict["AtomKey", np.array]:
         """Find N-Ca-C coordinates to build this residue from."""
         # rtm only used by assemble()
+        startPos = {}
         if 0 < len(self.rprev):
             # if there is a previous residue, build on from it
-            startPos = {}
             # nb akl for this res n-ca-c in rp (prev res) dihedra
             akl: List[AtomKey] = []
             for tpl in self.NCaCKey:
@@ -2519,6 +2561,14 @@ class IC_Residue:
             if 3 > len(startPos):  # if don't have all 3, reset to have none
                 startPos = {}
         else:
+            cic = self.cic
+            for ncac in self.NCaCKey:
+                if np.all(cic.atomArrayValid[[cic.atomArrayIndex[ak] for ak in ncac]]):
+                    for ak in ncac:
+                        startPos[ak] = cic.atomArray[cic.atomArrayIndex[ak]]
+            if startPos == {}:
+                startPos = self.default_startpos()
+
             # rtm
             # # get atom posns already added by load_structure
             # sp = self.residue.parent.internal_coord.initNCaC.get(self.rbase, None)
@@ -2527,9 +2577,6 @@ class IC_Residue:
             # else:
             #    # need copy Here (shallow ok) else assemble() adds to this dict
             #    startPos = cast(Dict["AtomKey", np.array], sp.copy())
-
-            #     <- if startPos == {}:
-            startPos = self.default_startpos()
 
         return startPos
 
@@ -2598,11 +2645,13 @@ class IC_Residue:
         dcsValid = cic.dcsValid
         aaValid = cic.atomArrayValid
         aaNdx = cic.atomArrayIndex
-
-        NCaCKey = sorted(self.NCaCKey)
+        aa = cic.atomArray
 
         if not self.ak_set:
             return None  # give up now if no atoms to work with
+
+        NCaCKey = sorted(self.NCaCKey)
+        rseqpos = self.rbase[0]
 
         # order of these startLst entries matters
         startLst = self._split_akl((self.rak("C"), self.rak("CA"), self.rak("N")))
@@ -2647,6 +2696,7 @@ class IC_Residue:
             if dihedraKeys is not None:
                 for dk in dihedraKeys:
                     d = cic.dihedra[dk]
+                    dseqpos = int(d.aks[0].akl[AtomKey.fields.respos])
                     if not hasattr(d, "initial_coords"):
                         d.initial_coords = cic.dAtoms[d.ndx]
                     if 4 == len(d.initial_coords) and d.initial_coords[3] is not None:
@@ -2662,7 +2712,8 @@ class IC_Residue:
 
                         if 4 == acount:
                             # dihedron already done, queue 2nd hedron key
-                            q.appendleft(d_h2key)
+                            if dseqpos == rseqpos:  # only this residue
+                                q.appendleft(d_h2key)
                             # if dbg:
                             #    print("    4- already done, append left")
                             if not dcsValid[d.ndx]:  # missing transform
@@ -2691,9 +2742,11 @@ class IC_Residue:
                             # if dbg:
                             #    print("        acak3=", acak3.transpose())
 
-                            atomCoords[ak] = np.round(
-                                acak3, 3
-                            )  # round to PDB format 8.3
+                            # atomCoords[ak] = np.round(
+                            #     acak3, 3
+                            # )  # round to PDB format 8.3
+                            atomCoords[ak] = acak3
+                            aa[aaNdx[ak]] = acak3
                             aaValid[aaNdx[ak]] = True
 
                             # if dbg:
@@ -2703,7 +2756,8 @@ class IC_Residue:
                             #        "coords:",
                             #        atomCoords[akl[3]].transpose(),
                             #    )
-                            q.appendleft(d_h2key)
+                            if dseqpos == rseqpos:  # only this residue
+                                q.appendleft(d_h2key)
                         else:
                             if verbose:
                                 print("no coords to start", d)
@@ -3795,6 +3849,7 @@ class Hedron(Edron):
             return 0.0
 
     def _invalidate_atoms(self):
+        print("INVALIDATE_ATOMS")
         self.cic.hAtoms_needs_update[self.ndx] = True
         for ak in self.aks:
             self.cic.atomArrayValid[self.cic.atomArrayIndex[ak]] = False
@@ -4076,7 +4131,8 @@ class Dihedron(Edron):
 
         self._dihedral = dangle_deg
         self.needs_update = True
-        try:
+        # rtm
+        if True:  # try:
             cic = self.cic
             dndx = self.ndx
             cic.dihedraAngle[dndx] = dangle_deg
@@ -4084,8 +4140,8 @@ class Dihedron(Edron):
             cic.dAtoms_needs_update[dndx] = True
             cic.atomArrayValid[cic.atomArrayIndex[self.aks[3]]] = False
 
-        except AttributeError:
-            pass
+        # except AttributeError:
+        #    pass
 
 
 class AtomKey:
