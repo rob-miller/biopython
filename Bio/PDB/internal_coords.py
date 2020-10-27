@@ -983,16 +983,7 @@ class IC_Chain:
                     res.internal_coord.rprev[0].coords_to_residue(rnext=True)
 
     def init_edra(self) -> None:
-        """Create chain level di/hedra arrays, init atomArray if needed.
-
-        If called by read_PIC, self.di/hedra = {} and object tree has IC data.
-        -> build chain arrays from IC data, also empty atomArray
-
-        If called at start of atom_to_internal_coords, self.di/hedra fully
-        populated.  -> create empty chain numpy arrays
-
-        In both cases, fix di/hedra object attributes to be views on
-        chain-level array data
+        """Create chain and residue di/hedra structures, init atomArray if needed."""
         """
         print("INIT_EDRA")
         if self.hedra == {}:
@@ -1129,6 +1120,7 @@ class IC_Chain:
         self.dH2ndx = np.array(
             tuple(self.hedraNdx[d.h2key] for d in self.dihedra.values())
         )
+    """
 
     # @profile
     def init_atom_coords(self) -> None:
@@ -1447,8 +1439,9 @@ class IC_Chain:
         hedraDict2 = {}
         gCBdihedra = set()
 
-        for ric in self.ordered_aa_ic_list:
-            ric.atom_to_internal_coordinates(verbose=verbose)  # builds di/hedra objects
+        if self.ordered_aa_ic_list[0].hedra == {}:
+            for ric in self.ordered_aa_ic_list:
+                ric.create_edra(verbose=verbose)  # builds di/hedra objects
 
         if not hasattr(self, "atomArrayValid"):
             self.build_atomArray()  # ric.a2ic added gly CBs to akset
@@ -1469,22 +1462,25 @@ class IC_Chain:
 
         # self.init_edra()  # rtm create empty chain hLAL, da arrays
 
-        # hedra
-        self.hedraLen = len(self.hedra)
-        self.hedraL12 = np.empty((self.hedraLen), dtype=np.float64)
-        self.hedraAngle = np.empty((self.hedraLen), dtype=np.float64)
-        self.hedraL23 = np.empty((self.hedraLen), dtype=np.float64)
+        if not hasattr(self, "hedraLen"):
+            # hedra
+            self.hedraLen = len(self.hedra)
+            self.hedraL12 = np.empty((self.hedraLen), dtype=np.float64)
+            self.hedraAngle = np.empty((self.hedraLen), dtype=np.float64)
+            self.hedraL23 = np.empty((self.hedraLen), dtype=np.float64)
 
-        # self.hedraNdx = dict(zip(sorted(self.hedra.keys()), range(len(self.hedra))))
-        self.hedraNdx = dict(zip(self.hedra.keys(), range(len(self.hedra))))
+            # self.hedraNdx = dict(zip(sorted(self.hedra.keys()), range(len(self.hedra))))
+            self.hedraNdx = dict(zip(self.hedra.keys(), range(len(self.hedra))))
 
-        # dihedra
-        self.dihedraLen = len(self.dihedra)
-        self.dihedraAngle = np.empty(self.dihedraLen)
-        self.dihedraAngleRads = np.empty(self.dihedraLen)
+            # dihedra
+            self.dihedraLen = len(self.dihedra)
+            self.dihedraAngle = np.empty(self.dihedraLen)
+            self.dihedraAngleRads = np.empty(self.dihedraLen)
 
-        self.dihedraNdx = dict(zip(sorted(self.dihedra.keys()), range(self.dihedraLen)))
-        # self.dihedraNdx = dict(zip(self.dihedra.keys(), range(self.dihedraLen)))
+            self.dihedraNdx = dict(
+                zip(sorted(self.dihedra.keys()), range(self.dihedraLen))
+            )
+            # self.dihedraNdx = dict(zip(self.dihedra.keys(), range(self.dihedraLen)))
 
         if not hasattr(self, "hAtoms_needs_update"):
             self.build_edraArrays()
@@ -1546,6 +1542,7 @@ class IC_Chain:
 
         # rtm skip this for now
         if hedraAtomDict != {}:
+            print("A2I UNEXPECTED")
             # some hedra not in dihedra to process
             # issue from alternate CB path, triggered by residue sidechain path not
             # including n-ca-cb-xg
@@ -1888,9 +1885,9 @@ class IC_Chain:
             fp.write("     [ ")
             fp.write(
                 "{:9.5f}, {:9.5f}, {:9.5f}".format(
-                    set_accuracy_95(hed.L12),  # (hed.lal[0]),  # len12
-                    set_accuracy_95(hed.Angle),  # (hed.lal[1]),  # angle
-                    set_accuracy_95(hed.L23),  # (hed.lal[2]),  # len23
+                    set_accuracy_95(hed.len12),  # (hed.lal[0]),  # len12
+                    set_accuracy_95(hed.angle),  # (hed.lal[1]),  # angle
+                    set_accuracy_95(hed.len23),  # (hed.lal[2]),  # len23
                 )
             )
             atom_str = ""  # atom and bond state
@@ -2129,7 +2126,7 @@ class IC_Residue:
         Naming: 4x1 array is correct, but numpy handles automatically
     coords_to_residue()
         Convert homogeneous atom_coords to Biopython cartesian Atom coords
-    atom_to_internal_coordinates(verbose)
+    create_edra(verbose)
         Create hedra and dihedra for atom coordinates
     get_angle()
         Return angle for passed key
@@ -2941,7 +2938,7 @@ class IC_Residue:
                 dct[tnlst].needs_update = True  # type: ignore
 
     # @profile
-    def atom_to_internal_coordinates(self, verbose: bool = False) -> None:
+    def create_edra(self, verbose: bool = False) -> None:
         """Create hedra and dihedra for atom coordinates.
 
         :param verbose: bool default False
