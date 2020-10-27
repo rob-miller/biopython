@@ -685,7 +685,11 @@ class IC_Chain:
             # assume valid pic files with all 3 of N, Ca, C coords
             initNCaC = []
             for atm in ric.residue.get_atoms():
-                if atm.coord is not None:
+                if 2 == atm.is_disordered():
+                    for altAtom in atm.child_dict.values():
+                        if altAtom.coord is not None:
+                            initNCaC.append(AtomKey(ric, altAtom))
+                elif atm.coord is not None:
                     initNCaC.append(AtomKey(ric, atm))
             if initNCaC != []:
                 self.initNCaCs.append(tuple(initNCaC))
@@ -1276,27 +1280,51 @@ class IC_Chain:
 
     def propagate_changes(self) -> None:
         """Track through di/hedra to invalidate dependent atoms."""
-        invalid_atoms = np.logical_not(self.atomArrayValid)
-        invalid_atom_ndxs = np.where(invalid_atoms)[0]
-        affected_hedra = set()
+        # chain_starts = [self.atomArrayIndex[akt[0]] for akt in self.initNCaCs]
+        # cs = chain_starts.pop(0)
+
+        csNdx = 0
+        csLen = len(self.initNCaCs)
         atmNdx = AtomKey.fields.atm
         posNdx = AtomKey.fields.respos
         done = set()
-        for andx in invalid_atom_ndxs:
-            ak = self.aktuple[andx]
-            atm = ak.akl[atmNdx]
-            pos = ak.akl[posNdx]
-            if atm in ("N", "CA", "C"):
-                self.atomArrayValid[andx:] = False  # backbone moved so
-                return  # all subsequent moved and we are done
-            elif pos not in done and atm not in ("O", "H"):
-                # O and H are termini so ignore
-                for i in range(andx, self.AAsiz):
-                    if self.aktuple[i].akl[posNdx] == pos:
-                        self.atomArrayValid[i] = False
-                    else:
+
+        while csNdx < csLen:  # iterate over chain starts
+            startAK = self.initNCaCs[csNdx][0]
+            csStart = self.atomArrayIndex[startAK]
+            csnTry = csNdx + 1
+            if csLen == csnTry:
+                csNext = self.AAsiz  # last segment to endof atomArray
+            else:  # this segment to next chain start
+                finAK = self.initNCaCs[csnTry][0]
+                csNext = self.atomArrayIndex[finAK]
+            # invalid_atoms = np.logical_not(self.atomArrayValid)
+            # invalid_atom_ndxs = np.where(invalid_atoms)[0]
+            # fin = invalid_atom_ndxs[csNext - 1]
+            # for andx in invalid_atom_ndxs[csStart:csNext]:
+            for andx in range(csStart, csNext):
+                if not self.atomArrayValid[andx]:
+                    ak = self.aktuple[andx]
+                    atm = ak.akl[atmNdx]
+                    pos = ak.akl[posNdx]
+                    if atm in ("N", "CA", "C"):
+                        # backbone moved so all to next start moved
+                        self.atomArrayValid[andx:csNext] = False
+                        # and done with this invalid_atom_ndxs segment
                         break
-                done.add(pos)
+                    elif pos not in done and atm not in ("O", "H"):
+                        # O and H are termini so ignore, no effect on subsequent atoms
+                        # atomArray is sorted so sidechain atoms follow backbone
+                        for i in range(andx, csNext):
+                            if self.aktuple[i].akl[posNdx] == pos:
+                                self.atomArrayValid[i] = False
+                            else:
+                                # done with residue sidechain when find next seq pos
+                                # so need not go to fin
+                                break
+                        done.add(pos)
+            csNdx += 1
+
         """
         rtm
             affected_hedra.update(self.a2h_map[andx])
