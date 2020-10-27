@@ -117,13 +117,18 @@ class Rebuild(unittest.TestCase):
                     ric.set_angle("psi", nv)
                     nvpsi[str(r)] = nv
         mdl.internal_to_atom_coordinates()
-        sf = StringIO()
-        write_PDB(self.pdb_1LCD, sf)
-        sf.seek(0)
-        new_1LCD = self.PDB_parser.get_structure("1LCD", sf)
-        for mdl in new_1LCD:
-            if mdl.serial_num == 2:
-                break
+
+        # prove not using stored results
+        for chn in mdl.get_chains():
+            if hasattr(chn, "hedraLen"):
+                delattr(chn.internal_coord, "hedraLen")
+                delattr(chn.internal_coord, "dihedraLen")
+                delattr(chn.internal_coord, "hedraAngle")
+                delattr(chn.internal_coord, "dihedraAngle")
+                for r in chn.get_residues():
+                    r.internal_coord.hedra = {}
+                    r.internal_coord.dihedra = {}
+
         mdl.atom_to_internal_coordinates()
         ttcount = 0
         c1tcount = 0
@@ -135,17 +140,17 @@ class Rebuild(unittest.TestCase):
                 if ric.rprev != [] and tau is not None:
                     ttcount += 1
                     # print(str(r), "tau", tau, nvt[str(r)])
-                    self.assertAlmostEqual(tau, nvt[str(r)], places=1)
+                    self.assertAlmostEqual(tau, nvt[str(r)], places=3)
                 chi1 = ric.get_angle("chi1")
                 if chi1 is not None:
                     c1tcount += 1
                     # print(str(r), "chi1", chi1, nvc1[str(r)])
-                    self.assertAlmostEqual(chi1, nvc1[str(r)], places=1)
+                    self.assertAlmostEqual(chi1, nvc1[str(r)], places=3)
                 psi = ric.get_angle("psi")
                 if psi is not None:
                     psitcount += 1
                     # print(str(r), "psi", psi, nvpsi[str(r)])
-                    self.assertAlmostEqual(psi, nvpsi[str(r)], places=1)
+                    self.assertAlmostEqual(psi, nvpsi[str(r)], places=3)
         self.assertEqual(tcount, ttcount)
         self.assertEqual(c1count, c1tcount)
         self.assertEqual(psicount, psitcount)
