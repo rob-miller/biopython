@@ -491,7 +491,7 @@ class IC_Chain:
                 last_res = this_res
 
         self.akset = akset
-        self.aktuple = tuple(sorted(akset))
+        # wait for gcb - self.aktuple = tuple(sorted(akset))
 
         # if last_ord_res != []:
         #    self.build_atomArray(akset) # do this after adding gcb's
@@ -545,6 +545,7 @@ class IC_Chain:
         self.AAsiz = len(self.akset)
         # sorted(akset) needed here for pdb atom serial number and to maintain
         # consistency between a2ic and i2ac
+        self.aktuple = tuple(sorted(self.akset))
         self.atomArrayIndex = dict(zip(self.aktuple, range(self.AAsiz)))
         self.atomArrayValid = np.zeros(self.AAsiz, dtype=bool)
         self.atomArray = np.zeros((self.AAsiz, 4), dtype=np.float64)
@@ -677,7 +678,7 @@ class IC_Chain:
         """
         # self.set_residues()
 
-        self.aktuple = tuple(sorted(self.akset))
+        # do in build_atomArray - self.aktuple = tuple(sorted(self.akset))
 
         for ric in self.ordered_aa_ic_list:
             # log chain starts - beginning and after breaks
@@ -926,8 +927,9 @@ class IC_Chain:
             process
 
         """
-        for ric in self.ordered_aa_ic_list:
-            ric.clear_transforms()
+        # for ric in self.ordered_aa_ic_list:
+        #    ric.clear_transforms()
+        self.dcsValid[:] = False
 
         for ric in self.ordered_aa_ic_list:
             # if not hasattr(ric, "NCaCKey"):
@@ -1696,12 +1698,12 @@ class IC_Chain:
         if hasattr(self, "scale"):  # used for openscad output
             Ca_Cb_Len *= self.scale  # type: ignore
 
-        for gcb in self.gcb:
-            cbak = gcb[3]
-            self.atomArrayValid[self.atomArayIndex[cbak]] = False
+        for gcb, gcbd in self.gcb.items():
+            cbak = gcbd[3]
+            self.atomArrayValid[self.atomArrayIndex[cbak]] = False
             ric = cbak.ric
             rN, rCA, rC, rO = ric.rak("N"), ric.rak("CA"), ric.rak("C"), ric.rak("O")
-            gCBd = self.dihedra[gcb]
+            gCBd = self.dihedra[gcbd]
             dndx = gCBd.ndx
             # generated dihedron is O-Ca-C-Cb
             # hedron2 is reversed: Cb-Ca-C (also h1 reversed: C-Ca-O)
@@ -1709,7 +1711,10 @@ class IC_Chain:
             self.hedraL12[h2ndx] = Ca_Cb_Len
             self.hedraAngle[h2ndx] = 110.17513
             self.hedraL23[h2ndx] = self.hedraL12[self.hedraNdx[(rCA, rC, rO)]]
-            gCBd.hedron2._invalidate_atoms()
+            # gCBd.hedron2._invalidate_atoms()
+            self.hAtoms_needs_update[gCBd.hedron2.ndx] = True
+            for ak in gCBd.hedron2.aks:
+                self.atomArrayValid[self.atomArrayIndex[ak]] = False
 
             refval = self.dihedra.get((rN, rCA, rC, rO), None)
             if refval:
@@ -1815,6 +1820,7 @@ class IC_Chain:
         ndx = 0
         chnStarted = False
 
+        self.dcsValid[:] = False
         for ric in self.ordered_aa_ic_list:
             if "O" not in ric.akc:
                 if ric.lc != "G" and ric.lc != "A":
@@ -1838,7 +1844,7 @@ class IC_Chain:
             ndx += 1
 
             # assemble with no start position, return transform matrices
-            ric.clear_transforms()
+            # ric.clear_transforms()
 
             # update residue atom coords for no start position
             # this makes ric.atom_coords new copy, not view of chain atomArray
@@ -3042,7 +3048,7 @@ class IC_Residue:
             self.ak_set.add(AtomKey(self, "CB"))
             sCB = self.rak("CB")
             sCB.missing = False  # was True because akc cache did not have entry
-            self.cic.ak_set.add(sCB)
+            self.cic.akset.add(sCB)
             # self.atom_coords[sCB] = None
 
             # main orientation comes from O-C-Ca-Cb so make Cb-Ca-C hedron
