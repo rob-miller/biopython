@@ -38,6 +38,8 @@ from Bio.PDB.internal_coords import IC_Residue, IC_Chain
 # from Bio.PDB.Residue import Residue
 from Bio.PDB.vectors import homog_scale_mtx
 
+import numpy as np  # type: ignore
+
 
 def _scale_residue(res, scale, scaleMtx):
     if res.internal_coord:
@@ -108,15 +110,27 @@ def write_SCAD(
                 chn.internal_coord = IC_Chain(chn)
                 added_IC_Atoms = True
     elif "C" == entity.level:
-        if not entity.internal_coord:
+        if not entity.internal_coord:  # entity.internal_coord:
             entity.internal_coord = IC_Chain(entity)
             added_IC_Atoms = True
     else:
         raise PDBException("level not S, M or C: " + str(entity.level))
 
-    if not added_IC_Atoms and scale is not None:
+    if not added_IC_Atoms:
         # if loaded pic file and need to scale, generate atom coords
         entity.internal_to_atom_coordinates()
+    else:  # and not IC_Chain.ParallelAssembleResidues:
+        # if loaded pdb, need to scale, and serial asm, gen atomArray
+        entity.atom_to_internal_coordinates()
+
+    """
+    if scale is not None:
+        if not added_IC_Atoms:
+            # if loaded pic file and need to scale, generate atom coords
+            entity.internal_to_atom_coordinates()
+        elif added_IC_Atoms:  # and not IC_Chain.ParallelAssembleResidues:
+            # if loaded pdb, need to scale, and serial asm, gen atomArray
+            entity.atom_to_internal_coordinates()
 
     # need to reset rnext and rprev in case MaxPeptideBond changed
     if not added_IC_Atoms:
@@ -137,15 +151,32 @@ def write_SCAD(
                 # chnp.link_residues()
                 # chnp.init_edra()  # render_dihedra()
                 # chnp.init_atom_coords()
+    """
 
     if scale is not None:
         scaleMtx = homog_scale_mtx(scale)
-        for res in entity.get_residues():
-            if 2 == res.is_disordered():
-                for r in res.child_dict.values():
-                    _scale_residue(r, scale, scaleMtx)
-            else:
-                _scale_residue(res, scale, scaleMtx)
+        # if IC_Chain.ParallelAssembleResidues:
+        if "C" == entity.level:
+            entity.internal_coord.atomArray = np.dot(
+                entity.internal_coord.atomArray[:], scaleMtx
+            )
+            entity.internal_coord.hAtoms_needs_update[:] = True
+            entity.internal_coord.scale = scale
+        else:
+            for chn in entity.get_chains():
+                if hasattr(chn.internal_coord, "atomArray"):
+                    chn.internal_coord.atomArray = np.dot(
+                        chn.internal_coord.atomArray[:], scaleMtx
+                    )
+                    chn.internal_coord.hAtoms_needs_update[:] = True
+                    chn.internal_coord.scale = scale
+        # else:
+        #    for res in entity.get_residues():
+        #        if 2 == res.is_disordered():
+        #            for r in res.child_dict.values():
+        #                _scale_residue(r, scale, scaleMtx)
+        #        else:
+        #            _scale_residue(res, scale, scaleMtx)
 
     # generate internal coords for scaled entity
     # (hedron bond lengths have changed if scaled)
@@ -156,15 +187,25 @@ def write_SCAD(
 
     allBondsStash = IC_Residue.AllBonds
     IC_Residue.AllBonds = True
+    # trigger rebuild of hedra for AllBonds
+    if "C" == entity.level:
+        entity.internal_coord.ordered_aa_ic_list[0].hedra = {}
+        delattr(entity.internal_coord, "hAtoms_needs_update")
+        delattr(entity.internal_coord, "hedraLen")
+    else:
+        for chn in entity.get_chains():
+            chn.internal_coord.ordered_aa_ic_list[0].hedra = {}
+            delattr(chn.internal_coord, "hAtoms_needs_update")
+            delattr(chn.internal_coord, "hedraLen")
     entity.atom_to_internal_coordinates()
     IC_Residue.AllBonds = allBondsStash
 
     # clear initNCaC - want at origin, not match PDB file
     if "C" == entity.level:
-        entity.internal_coord.initNCaC = {}
+        entity.internal_coord.initNCaC = []  # rtm {}
     else:
         for chn in entity.get_chains():
-            chn.internal_coord.initNCaC = {}
+            chn.internal_coord.initNCaCs = []  # {}
 
     # rebuild atom coordinates now starting at origin: in OpenSCAD code, each
     # residue model is transformed to N-Ca-C start position instead of updating
