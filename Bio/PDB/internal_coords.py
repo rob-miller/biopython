@@ -290,6 +290,8 @@ class IC_Chain:
             ric.hedra = copy.deepcopy(ric.hedra, memo)
 
         dup.sqMaxPeptideBond = self.sqMaxPeptideBond
+        dup.initNCaCs = copy.deepcopy(self.initNCaCs, memo)
+        dup.AAsiz = self.AAsiz
 
         dup.hedraLen = self.hedraLen
         dup.hedraL12 = self.hedraL12.copy()
@@ -426,8 +428,13 @@ class IC_Chain:
                     f"chain break at {res.internal_coord.pretty_str()} due to {reason}"
                 )
             # initNCaC: Dict["AtomKey", np.array] = {}
-            initNCaC = []
             ric = res.internal_coord
+            """
+            foo = ric.split_akl(
+                    (AtomKey(ric, "N"), AtomKey(ric, "CA"), AtomKey(ric, "C"))
+                )
+            """
+            initNCaC = []
             for atm in ("N", "CA", "C"):
                 bpAtm = res.child_dict[atm]
                 if bpAtm.is_disordered():
@@ -439,7 +446,18 @@ class IC_Chain:
                     initNCaC.append(ak)
                     # initNCaC[ak] = IC_Residue.atm241(bpAtm.coord)
             # self.initNCaC[ric.rbase] = initNCaC
-            self.initNCaCs.append(tuple(initNCaC))
+            foo = ric.split_akl(
+                (AtomKey(ric, "N"), AtomKey(ric, "CA"), AtomKey(ric, "C"))
+            )
+            # rtm self.initNCaCs.append(tuple(initNCaC))
+            self.initNCaCs.extend(foo)
+            """
+            self.initNCaCs.extend(
+                ric.split_akl(
+                    (AtomKey(ric, "N"), AtomKey(ric, "CA"), AtomKey(ric, "C"))
+                )
+            )
+            """
             return True
         elif (
             0 == len(res.child_list)
@@ -698,7 +716,7 @@ class IC_Chain:
             # next residue NCaCKeys so can do per-residue assemble()
             ric.NCaCKey = []
             ric.NCaCKey.extend(
-                ric._split_akl(
+                ric.split_akl(
                     (AtomKey(ric, "N"), AtomKey(ric, "CA"), AtomKey(ric, "C"))
                 )
             )
@@ -1237,7 +1255,7 @@ class IC_Chain:
 
         # can't start assembly if initial NCaC is not valid, so copy from
         # hAtoms if needed
-        # rtm would be better to use coordspace if oiginal coords are non-zero
+        # rtm would be better to use coordspace if original coords are non-zero
         for iNCaC in self.initNCaCs:
             invalid = True
             if np.all(self.atomArrayValid[[self.atomArrayIndex[ak] for ak in iNCaC]]):
@@ -1273,7 +1291,11 @@ class IC_Chain:
         self.dcsValid[workSelector] = True
 
     def propagate_changes(self) -> None:
-        """Track through di/hedra to invalidate dependent atoms."""
+        """Track through di/hedra to invalidate dependent atoms.
+
+        cs : chain segment
+        csStart, csNext : AtomArray indexes for chain segment
+        """
         # chain_starts = [self.atomArrayIndex[akt[0]] for akt in self.initNCaCs]
         # cs = chain_starts.pop(0)
 
@@ -1288,7 +1310,7 @@ class IC_Chain:
             csStart = self.atomArrayIndex[startAK]
             csnTry = csNdx + 1
             if csLen == csnTry:
-                csNext = self.AAsiz  # last segment to endof atomArray
+                csNext = self.AAsiz  # last segment to end of atomArray
             else:  # this segment to next chain start
                 finAK = self.initNCaCs[csnTry][0]
                 csNext = self.atomArrayIndex[finAK]
@@ -2504,7 +2526,7 @@ class IC_Residue:
         # new version copy from hedraDict2Chain
         self.NCaCKey = []
         self.NCaCKey.extend(
-            self._split_akl(
+            self.split_akl(
                 (AtomKey(self, "N"), AtomKey(self, "CA"), AtomKey(self, "C"))
             )
         )
@@ -2518,7 +2540,7 @@ class IC_Residue:
 
         try:
             for tpl in sorted(self.NCaCKey):
-                newNCaCKey.extend(self._split_akl(tpl))
+                newNCaCKey.extend(self.split_akl(tpl))
             self.NCaCKey = cast(List[HKT], newNCaCKey)
             # if len(newNCaCKey) != 1 and len(self.rprev) == 0:
             #  debug code to find examples of chains starting with disordered residues
@@ -2685,14 +2707,14 @@ class IC_Residue:
         rseqpos = self.rbase[0]
 
         # order of these startLst entries matters
-        startLst = self._split_akl((self.rak("C"), self.rak("CA"), self.rak("N")))
+        startLst = self.split_akl((self.rak("C"), self.rak("CA"), self.rak("N")))
         if "CB" in self.akc:
             startLst.extend(
-                self._split_akl((self.rak("N"), self.rak("CA"), self.rak("CB")))
+                self.split_akl((self.rak("N"), self.rak("CA"), self.rak("CB")))
             )
         if "O" in self.akc:
             startLst.extend(
-                self._split_akl((self.rak("O"), self.rak("C"), self.rak("CA")))
+                self.split_akl((self.rak("O"), self.rak("C"), self.rak("CA")))
             )
 
         startLst.extend(NCaCKey)
@@ -2805,12 +2827,16 @@ class IC_Residue:
 
         return atomCoords
 
-    def _split_akl(
+    def split_akl(
         self,
         lst: Union[Tuple["AtomKey", ...], List["AtomKey"]],
         missingOK: bool = False,
     ) -> List[Tuple["AtomKey", ...]]:
         """Get AtomKeys for this residue (ak_set) given generic list of AtomKeys.
+
+        Changes and/or expands a list of 'generic' AtomKeys (e.g. 'N, C, C') to
+        be specific to this Residue's altlocs etc., e.g.
+        '(N-Ca_A_0.3-C, N-Ca_B_0.7-C)'
 
         Given a list of AtomKeys (aks) for a Hedron or Dihedron,
           return:
@@ -2929,7 +2955,7 @@ class IC_Residue:
         else:
             tlst = lst
 
-        hl = self._split_akl(tlst)  # expand tlst with any altlocs
+        hl = self.split_akl(tlst)  # expand tlst with any altlocs
         # returns list of tuples
 
         for tnlst in hl:
@@ -2967,7 +2993,7 @@ class IC_Residue:
             for rn in self.rnext:
                 nN, nCA, nC = rn.rak("N"), rn.rak("CA"), rn.rak("C")
 
-                nextNCaC = rn._split_akl((nN, nCA, nC), missingOK=True)
+                nextNCaC = rn.split_akl((nN, nCA, nC), missingOK=True)
 
                 for tpl in nextNCaC:
                     for ak in tpl:
@@ -4439,8 +4465,23 @@ class AtomKey:
                         return si, oi  # swap so higher occupancy comes first
                     elif AtomKey.fields.respos == i:
                         return int(s), int(o)
-                    else:  # resname or altloc
-                        return ord(s), ord(o)
+                    elif AtomKey.fields.resname == i:
+                        sac, oac = (
+                            self.akl[AtomKey.fields.altloc],
+                            other.akl[AtomKey.fields.altloc],
+                        )
+                        if sac is not None:
+                            if oac is not None:
+                                return ord(sac), ord(oac)  # altloc over resname
+                            else:  # sac has val and oac is None
+                                return 1, 0
+                        elif oac is not None:  # oac has val and sac is None
+                            return 0, 1
+                        # else:
+                        #    return ord(s), ord(o)  # sac, oac = None
+                    # else:  # altloc
+                    # fall through for altloc and resname with both altloc = None
+                    return ord(s), ord(o)
 
                 # atom names from here
                 # backbone atoms before sidechain atoms
