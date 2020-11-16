@@ -10,6 +10,7 @@
 import unittest
 import re
 import warnings
+import copy
 
 try:
     import numpy  # noqa F401
@@ -39,6 +40,7 @@ class Rebuild(unittest.TestCase):
     CIF_parser = MMCIFParser(QUIET=True)
     pdb_1LCD = PDB_parser.get_structure("1LCD", "PDB/1LCD.pdb")
     pdb_2XHE = PDB_parser.get_structure("2XHE", "PDB/2XHE.pdb")
+    pdb_2XHE2 = PDB_parser.get_structure("2XHE", "PDB/2XHE.pdb")
     cif_3JQH = CIF_parser.get_structure("3JQH", "PDB/3JQH.cif")
     cif_4CUP = CIF_parser.get_structure("4CUP", "PDB/4CUP.cif")
 
@@ -71,6 +73,62 @@ class Rebuild(unittest.TestCase):
         self.assertEqual(r["aCoordMatchCount"], 217)
         self.assertEqual(len(r["chains"]), 1)
         self.assertTrue(r["pass"])
+
+    def test_no_crosstalk(self):
+        """Deep copy, change few internal coords and prove nothing else changes."""
+        self.cif_3JQH.atom_to_internal_coordinates()
+        cpy3jqh = copy.deepcopy(self.cif_3JQH)
+        cic0 = self.cif_3JQH.child_list[0].child_list[0].internal_coord
+        cic1 = cpy3jqh.child_list[0].child_list[0].internal_coord
+        foo = self.cif_3JQH.child_list[0]
+        bar = foo.child_list[0]
+        alist = ["omg", "phi", "psi", "chi1", "chi2", "chi3", "chi4", "chi5", "tau"]
+        delta = 33  # degrees to change
+        tdelta = delta / 10.0  # more realistic for bond angle
+        targPos = 1
+        for ang in alist:
+            ricTarg = cic0.chain.child_list[targPos].internal_coord
+            print(targPos + 1, ricTarg.lc, ang)
+            targPos += 2
+            try:
+                andx = ricTarg.pick_angle(ang).ndx
+                if ang == "tau":
+                    cic0.hedraAngle[andx] += tdelta
+                    cic0.hAtoms_needs_update[andx] = True
+                    cic0.atomArrayValid[cic0.h2aa[andx]] = False
+                else:
+                    cic0.dihedraAngle[andx] += delta
+                    if cic0.dihedraAngle[andx] > 180.0:
+                        cic0.dihedraAngle[andx] -= 360.0
+                    cic0.dihedraAngleRads[andx] = numpy.deg2rad(cic0.dihedraAngle[andx])
+                    cic0.dAtoms_needs_update[andx] = True
+                    cic0.atomArrayValid[cic0.d2aa[andx]] = False
+            except AttributeError:
+                pass  # if residue does not have e.g. chi5
+        cic0.internal_to_atom_coordinates()  # move atoms
+        cic0.atom_to_internal_coordinates()  # get new internal coords
+        targPos = 1
+        for ang in alist:
+            ricTarg = cic0.chain.child_list[targPos].internal_coord
+            print(targPos + 1, ricTarg.lc, ang)
+            targPos += 2
+            try:
+                andx = ricTarg.pick_angle(ang).ndx
+                if ang == "tau":
+                    ttest = cic0.hedraAngle[andx] - cic1.hedraAngle[andx]
+                    self.assertAlmostEqual(ttest, tdelta, places=4)
+                    delta = cic0.hedraAngle - cic1.hedraAngle
+                else:
+                    dtest = cic0.dihedraAngle[andx] - cic1.dihedraAngle[andx]
+                    delta = cic0.dihedraAngle - cic1.dihedraAngle
+                    dmask = numpy.absolute(delta)
+                    dmask = dmask > 0.0001
+                    rslt = delta[dmask]
+                    c0 = cic0.dihedraAngle[dmask]
+                    c1 = cic1.dihedraAngle[dmask]
+                    self.assertAlmostEqual(dtest, delta, places=4)
+            except AttributeError:
+                pass  # if residue does not have e.g. chi5
 
     def test_model_change_internal_coords(self):
         """Get model internal coords, modify psi and chi1 values and check."""
@@ -194,10 +252,11 @@ class Rebuild(unittest.TestCase):
                             self.assertAlmostEqual(float(ms[i]), target[i], places=0)
                     else:
                         self.fail("transform not found")
+
         sf.seek(0)
         IC_Residue.gly_Cbeta = True
         write_SCAD(
-            self.pdb_2XHE[0]["A"],
+            self.pdb_2XHE2[0]["A"],
             sf,
             10.0,
             pdbid="2xhe",
