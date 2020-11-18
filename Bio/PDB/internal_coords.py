@@ -78,7 +78,7 @@ except ImportError:
 from Bio.PDB.Atom import Atom, DisorderedAtom
 from Bio.PDB.Polypeptide import three_to_one
 
-from Bio.PDB.vectors import multi_coord_space, multi_rot_Z, multi_rot_Y
+from Bio.PDB.vectors import multi_coord_space, multi_rot_Z
 from Bio.PDB.vectors import coord_space
 
 # , calc_dihedral, Vector
@@ -96,7 +96,6 @@ from typing import (
     cast,
     TYPE_CHECKING,
     Optional,
-    ByteString,
 )
 
 if TYPE_CHECKING:
@@ -553,6 +552,7 @@ class IC_Chain:
             self.atomArrayValid[ndx] = True
 
         def setResAtms(res):
+            hasO = False
             for atm in res.get_atoms():
                 if atm.is_disordered():
                     for altAtom in atm.child_dict.values():
@@ -703,7 +703,7 @@ class IC_Chain:
             # chain starts are only atom coords in pic files
             # assume valid pic files with all 3 of N, Ca, C coords
             initNCaC = []
-            for atm in ric.residue.get_atoms():
+            for atm in ric.residue.get_atoms():  # n.b. only few PIC spec atoms
                 if 2 == atm.is_disordered():
                     for altAtom in atm.child_dict.values():
                         if altAtom.coord is not None:
@@ -854,9 +854,10 @@ class IC_Chain:
 
         # clear any transforms for dihedrals with outdated atoms
         workSelector = (dSetValid == self.dihedraOK).all(axis=1)
-        # rtm this breaks rebuild-test copyCoordSpace
+        # rtm this breaks rebuild-test: copyCoordSpace
         self.dcsValid[np.logical_not(workSelector)] = False
 
+        dihedraWrk = None
         if verbose:
             dihedraWrk = workSelector.size - workSelector.sum()
 
@@ -1239,6 +1240,23 @@ class IC_Chain:
             # self.dAtoms[:, 3][mdRev] = a4rot[udRev]  # [self.dRev]
 
             # self.dAtoms_needs_update[...] = False
+            if False:  # rtm debug code
+                ric = self.ordered_aa_ic_list[227]
+                amin = amax = None
+                for ak in ric.ak_set:
+                    ndx = self.atomArrayIndex[ak]
+                    if amin is None:
+                        amin = amax = ndx
+                    else:
+                        if ndx < amin:
+                            amin = ndx
+                        if ndx > amax:
+                            amax = ndx
+                    wAA = self.atomArray[amin - 10 : amax + 10]
+                wAAv = self.atomArrayValid[amin - 10 : amax + 10]
+
+                print(ric)
+                pass
 
         # build rz rotation matrix for dihedral angle
         rz = multi_rot_Z(self.dihedraAngleRads[self.dAtoms_needs_update])
@@ -2025,6 +2043,7 @@ class IC_Chain:
         for ric in self.ordered_aa_ic_list:
             # handle start / end
             for NCaCKey in sorted(ric.NCaCKey):  # type: ignore
+                mtr = None
                 if 0 < len(ric.rprev):
                     for rpr in ric.rprev:
                         acl = [rpr.atom_coords[ak] for ak in NCaCKey]
@@ -2184,7 +2203,9 @@ class IC_Residue:
     # chain)
     accept_resnames = ("CYG", "YCM", "UNK")
 
-    AllBonds: bool = False  # For OpenSCAD, generate explicit hedra covering all bonds if True.
+    AllBonds: bool = (
+        False  # For OpenSCAD, generate explicit hedra covering all bonds if True.
+    )
 
     def __init__(self, parent: "Residue", NO_ALTLOC: bool = False) -> None:
         """Initialize IC_Residue with parent Biopython Residue.
@@ -2586,6 +2607,7 @@ class IC_Residue:
             for i, a in enumerate(d.aks):
                 # atomCoords[a] = d.initial_coords[i]
                 atomCoords[a] = cic.dAtoms[d.ndx][i]
+        # rtm
         # if "O" not in self.akc and "CB" in self.akc:
         #    # need CB coord if no O coord - handle alternate CB path
         #    # but not clear how to do this for default position
@@ -2603,6 +2625,7 @@ class IC_Residue:
             for tpl in self.NCaCKey:
                 akl.extend(tpl)
             if self.rak("O").missing:
+                # rtm ???
                 # alternate CB path - only use if O is missing
                 # else have problems modifying phi angle
                 akl.append(AtomKey(self, "CB"))
@@ -3016,12 +3039,15 @@ class IC_Residue:
                 # redundant next residue C-beta locator (alternate CB path)
                 # otherwise missing O will cause no sidechain
                 # not rn.rak so don't trigger missing CB for Gly
-                nCB = rn.akc.get("CB", None)
-                if nCB is not None and nCB in rn.ak_set:  # rn.atom_coords:
-                    # self.atom_coords[nCB] = rn.atom_coords[nCB]
-                    self.ak_set.add(nCB)
-                    self._gen_edra((nN, nCA, nCB))
-                    self._gen_edra((sC, nN, nCA, nCB))
+                try:
+                    nO = rn.akc["O"]
+                except KeyError:
+                    nCB = rn.akc.get("CB", None)
+                    if nCB is not None and nCB in rn.ak_set:  # rn.atom_coords:
+                        # self.atom_coords[nCB] = rn.atom_coords[nCB]
+                        self.ak_set.add(nCB)
+                        self._gen_edra((nN, nCA, nCB))
+                        self._gen_edra((sC, nN, nCA, nCB))
 
         # if start of chain then need to init NCaC hedron as not in previous residue
         if 0 == len(self.rprev):
@@ -3101,7 +3127,8 @@ class IC_Residue:
             # prepare to add new Gly CB atom(s)
             # in IC_Chain.atom_to_internal_coordinates()
             if not hasattr(self.cic, "gcb"):
-                self.cic.gcb: Dict[AtomKey, Tuple] = {}
+                # self.cic.gcb: Dict[AtomKey, Tuple] = {}
+                self.cic.gcb = {}
                 # self.cic.gcb: List[AtomKey] = []
                 # self.cic.gcb: Dict[AtomKey, np.array] = {}
             self.cic.gcb[sCB] = dtpl
@@ -4169,6 +4196,7 @@ class Dihedron(Edron):
 
         faster to modify IC_Chain level arrays directly.
 
+        rtm:
         N.B. dihedron (i-1)C-N-CA-CB is ignored if O exists.
         C-beta is by default placed using O-C-CA-CB, but O is missing
         in some PDB file residues, which means the sidechain cannot be
