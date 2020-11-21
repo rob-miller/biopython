@@ -1340,14 +1340,15 @@ class IC_Chain:
                 if not self.atomArrayValid[andx]:
                     ak = self.aktuple[andx]
                     atm = ak.akl[atmNdx]
-                    pos = ak.akl[posNdx]
+                    pos = ak.akl[posNdx]  # sequence position = residue number
                     if atm in ("N", "CA", "C"):
                         # backbone moved so all to next start moved
                         self.atomArrayValid[andx:csNext] = False
                         # and done with this invalid_atom_ndxs segment
                         break
-                    elif pos not in done and atm not in ("O", "H"):
-                        # O and H are termini so ignore, no effect on subsequent atoms
+                    elif pos not in done and atm != "H":  # not in ("O", "H"):
+                        # H is terminal so ignore, no effect on subsequent atoms
+                        # O is terminal but used to locate CB
                         # atomArray is sorted so sidechain atoms follow backbone
                         for i in range(andx, csNext):
                             if self.aktuple[i].akl[posNdx] == pos:
