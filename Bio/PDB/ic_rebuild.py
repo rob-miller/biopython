@@ -38,7 +38,7 @@ from Bio.PDB.Entity import Entity
 
 
 def structure_rebuild_test(
-    entity, verbose: bool = False, copyCoords: bool = False
+    entity, verbose: bool = False, copyCoords: bool = False, quick: bool = False
 ) -> Dict:
     """Test rebuild PDB structure from internal coordinates.
 
@@ -73,7 +73,7 @@ def structure_rebuild_test(
                 ctic.dcsValid = csic.dcsValid
 
     pdb2.internal_to_atom_coordinates(verbose)
-    r = compare_residues(entity, pdb2, verbose=verbose)
+    r = compare_residues(entity, pdb2, verbose=verbose, quick=quick)
     return r
 
 
@@ -194,6 +194,7 @@ def IC_duplicate(entity) -> Structure:
     if not hasInternalCoords:
         if isinstance(entity, Residue):  # "R" == entity.level:
             # works better at chain level but leave option here
+            res = entity
             if not res.internal_coord:
                 res.internal_coord = IC_Residue(entity)
             res.internal_coord.atom_to_internal_coordinates()
@@ -301,6 +302,7 @@ def compare_residues(
     e0: Union[Structure, Model, Chain],
     e1: Union[Structure, Model, Chain],
     verbose: bool = False,
+    quick: bool = False,
 ) -> Dict[str, Any]:
     """Compare full IDs and atom coordinates for 2 Biopython PDB entities.
 
@@ -329,21 +331,50 @@ def compare_residues(
     cmpdict["pass"] = None
     cmpdict["report"] = None
 
-    for r0, r1 in zip_longest(e0.get_residues(), e1.get_residues()):
-        if 2 == r0.is_disordered() == r1.is_disordered():
-            for dr0, dr1 in zip_longest(r0.child_dict.values(), r1.child_dict.values()):
-                _cmp_res(dr0, dr1, verbose, cmpdict)
+    if quick:
+        if isinstance(e0, Chain):
+            if numpy.allclose(
+                e0.internal_coord.atomArray,
+                e1.internal_coord.atomArray,
+                rtol=1e-03,
+                atol=1e-05,
+            ):
+                cmpdict["pass"] = True
+                cmpdict["aCoordMatchCount"] = numpy.size(e0.internal_coord.atomArray, 0)
+            else:
+                cmpdict["pass"] = False
         else:
-            _cmp_res(r0, r1, verbose, cmpdict)
-
-    if (
-        cmpdict["rMatchCount"] == cmpdict["rCount"]
-        and cmpdict["aCoordMatchCount"] == cmpdict["aCount"]
-        and cmpdict["aFullIdMatchCount"] == cmpdict["aCount"]
-    ):
-        cmpdict["pass"] = True
+            cmpdict["pass"] = True
+            for c0, c1 in zip_longest(e0.get_chains(), e1.get_chains()):
+                if not numpy.allclose(
+                    c0.internal_coord.atomArray,
+                    c1.internal_coord.atomArray,
+                    rtol=1e-03,
+                    atol=1e-05,
+                ):
+                    cmpdict["pass"] = False
+                else:
+                    cmpdict["aCoordMatchCount"] += numpy.size(
+                        c0.internal_coord.atomArray, 0
+                    )
     else:
-        cmpdict["pass"] = False
+        for r0, r1 in zip_longest(e0.get_residues(), e1.get_residues()):
+            if 2 == r0.is_disordered() == r1.is_disordered():
+                for dr0, dr1 in zip_longest(
+                    r0.child_dict.values(), r1.child_dict.values()
+                ):
+                    _cmp_res(dr0, dr1, verbose, cmpdict)
+            else:
+                _cmp_res(r0, r1, verbose, cmpdict)
+
+        if (
+            cmpdict["rMatchCount"] == cmpdict["rCount"]
+            and cmpdict["aCoordMatchCount"] == cmpdict["aCount"]
+            and cmpdict["aFullIdMatchCount"] == cmpdict["aCount"]
+        ):
+            cmpdict["pass"] = True
+        else:
+            cmpdict["pass"] = False
 
     rstr = (
         "{}:{} {} -- {} of {} residue IDs match; {} residues {} atom coords, "
