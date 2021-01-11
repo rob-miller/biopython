@@ -552,7 +552,7 @@ class IC_Chain:
             self.atomArrayValid[ndx] = True
 
         def setResAtms(res):
-            hasO = False
+            # rtm hasO = False
             for atm in res.get_atoms():
                 if atm.is_disordered():
                     for altAtom in atm.child_dict.values():
@@ -1252,8 +1252,8 @@ class IC_Chain:
                             amin = ndx
                         if ndx > amax:
                             amax = ndx
-                    wAA = self.atomArray[amin - 10 : amax + 10]
-                wAAv = self.atomArrayValid[amin - 10 : amax + 10]
+                    wAA = self.atomArray[amin - 10 : amax + 10]  # noqa: F841
+                wAAv = self.atomArrayValid[amin - 10 : amax + 10]  # noqa: F841
 
                 print(ric)
                 pass
@@ -3041,7 +3041,7 @@ class IC_Residue:
                 # otherwise missing O will cause no sidechain
                 # not rn.rak so don't trigger missing CB for Gly
                 try:
-                    nO = rn.akc["O"]
+                    nO = rn.akc["O"]  # noqa: F841
                 except KeyError:
                     nCB = rn.akc.get("CB", None)
                     if nCB is not None and nCB in rn.ak_set:  # rn.atom_coords:
