@@ -28,7 +28,7 @@ from Bio.PDB.PICIO import write_PIC
 from Bio.File import as_handle
 from Bio.PDB.Model import Model
 from Bio.PDB.Residue import Residue
-from Bio.PDB.internal_coords import IC_Residue
+from Bio.PDB.internal_coords import IC_Residue, IC_Chain
 
 from Bio.PDB.PDBExceptions import PDBConstructionWarning
 
@@ -43,6 +43,7 @@ class Rebuild(unittest.TestCase):
     pdb_2XHE2 = PDB_parser.get_structure("2XHE", "PDB/2XHE.pdb")
     cif_3JQH = CIF_parser.get_structure("3JQH", "PDB/3JQH.cif")
     cif_4CUP = CIF_parser.get_structure("4CUP", "PDB/4CUP.cif")
+    cif_4CUP2 = CIF_parser.get_structure("4CUP", "PDB/4CUP.cif")
 
     def test_rebuild_multichain_missing(self):
         """Convert multichain missing atom protein to internal coordinates and back."""
@@ -76,19 +77,18 @@ class Rebuild(unittest.TestCase):
 
     def test_no_crosstalk(self):
         """Deep copy, change few internal coords and prove nothing else changes."""
-        self.cif_3JQH.atom_to_internal_coordinates()
-        cpy3jqh = copy.deepcopy(self.cif_3JQH)
-        cic0 = self.cif_3JQH.child_list[0].child_list[0].internal_coord
-        cic1 = cpy3jqh.child_list[0].child_list[0].internal_coord
-        foo = self.cif_3JQH.child_list[0]
-        bar = foo.child_list[0]
+        # IC_Chain.ParallelAssembleResidues = False
+        self.cif_4CUP.atom_to_internal_coordinates()
+        cpy4cup = copy.deepcopy(self.cif_4CUP)
+        cic0 = self.cif_4CUP.child_list[0].child_list[0].internal_coord
+        cic1 = cpy4cup.child_list[0].child_list[0].internal_coord
         alist = ["omg", "phi", "psi", "chi1", "chi2", "chi3", "chi4", "chi5", "tau"]
         delta = 33  # degrees to change
         tdelta = delta / 10.0  # more realistic for bond angle
         targPos = 1
         for ang in alist:
             ricTarg = cic0.chain.child_list[targPos].internal_coord
-            print(targPos + 1, ricTarg.lc, ang)
+            # print(targPos + 1, ricTarg.lc, ang)
             targPos += 2
             try:
                 andx = ricTarg.pick_angle(ang).ndx
@@ -96,6 +96,9 @@ class Rebuild(unittest.TestCase):
                     cic0.hedraAngle[andx] += tdelta
                     cic0.hAtoms_needs_update[andx] = True
                     cic0.atomArrayValid[cic0.h2aa[andx]] = False
+                    cic0.hAtoms_needs_update[:] = True
+                    cic0.atomArrayValid[:] = False
+                    cic0.dAtoms_needs_update[:] = True
                 else:
                     cic0.dihedraAngle[andx] += delta
                     if cic0.dihedraAngle[andx] > 180.0:
@@ -107,38 +110,55 @@ class Rebuild(unittest.TestCase):
                 pass  # if residue does not have e.g. chi5
         cic0.internal_to_atom_coordinates()  # move atoms
         cic0.atom_to_internal_coordinates()  # get new internal coords
+        # hdelta = (cic0.hedraAngle - cic1.hedraAngle).round(5)
+        # ddelta = (cic0.dihedraAngle - cic1.dihedraAngle).round(5)
+        hdelta = cic0.hedraAngle - cic1.hedraAngle
+        hdelta[numpy.abs(hdelta) < 0.00001] = 0.0
+        ddelta = cic0.dihedraAngle - cic1.dihedraAngle
+        ddelta[numpy.abs(ddelta) < 0.00001] = 0.0
         targPos = 1
         for ang in alist:
             ricTarg = cic0.chain.child_list[targPos].internal_coord
-            print(targPos + 1, ricTarg.lc, ang)
+            # print(targPos + 1, ricTarg.lc, ang)
             targPos += 2
             try:
                 andx = ricTarg.pick_angle(ang).ndx
                 if ang == "tau":
-                    ttest = cic0.hedraAngle[andx] - cic1.hedraAngle[andx]
-                    self.assertAlmostEqual(ttest, tdelta, places=4)
-                    delta = cic0.hedraAngle - cic1.hedraAngle
+                    # ttest = cic0.hedraAngle[andx] - cic1.hedraAngle[andx]
+                    self.assertAlmostEqual(hdelta[andx], tdelta, places=4)
+                    hdelta[andx] = 0.0
+                    # some other angle has to change to accommodate
+                    # N-Ca-Cb is artifact of choices in ic_data
+                    adjAngNdx = ricTarg.pick_angle("N:CA:CB").ndx
+                    self.assertNotAlmostEqual(hdelta[adjAngNdx], 0.0, places=1)
+                    hdelta[adjAngNdx] = 0.0
+                    # why does 149 get changed by other tau
                 else:
                     dtest = cic0.dihedraAngle[andx] - cic1.dihedraAngle[andx]
-                    delta = cic0.dihedraAngle - cic1.dihedraAngle
-                    dmask = numpy.absolute(delta)
-                    dmask = dmask > 0.0001
-                    rslt = delta[dmask]
-                    c0 = cic0.dihedraAngle[dmask]
-                    c1 = cic1.dihedraAngle[dmask]
+                    if dtest < -180.0:
+                        dtest += 360.0
+                    # dmask = numpy.absolute(delta)
+                    # dmask = dmask > 0.0001
+                    # rslt = delta[dmask]
+                    # c0 = cic0.dihedraAngle[dmask]
+                    # c1 = cic1.dihedraAngle[dmask]
                     self.assertAlmostEqual(dtest, delta, places=4)
+                    ddelta[andx] = 0.0
             except AttributeError:
                 pass  # if residue does not have e.g. chi5
 
+        hsum = hdelta.sum()
+        self.assertEqual(hsum, 0.0)
+        dsum = ddelta.sum()
+        self.assertEqual(dsum, 0.0)
+
     def test_model_change_internal_coords(self):
         """Get model internal coords, modify psi and chi1 values and check."""
-        for mdl in self.pdb_1LCD:
-            if mdl.serial_num == 2:
-                break
+        mdl = self.pdb_1LCD[1]
         mdl.atom_to_internal_coordinates()
         # other tests show can build with arbitrary internal coords
         # build here so changes below trigger more complicated
-        # xAtoms_needs_update mask arrays
+        # Atoms_needs_update mask arrays
         mdl.internal_to_atom_coordinates()
         nvt = {}
         nvc1 = {}
@@ -223,7 +243,7 @@ class Rebuild(unittest.TestCase):
         """
         sf = StringIO()
         write_SCAD(
-            self.cif_4CUP, sf, 10.0, pdbid="4cup", backboneOnly=True, includeCode=False
+            self.cif_4CUP2, sf, 10.0, pdbid="4cup", backboneOnly=True, includeCode=False
         )
         sf.seek(0)
         next_one = False
