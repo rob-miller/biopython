@@ -11,13 +11,18 @@ from datetime import date
 from io import StringIO
 
 try:
-    import numpy
-except ImportError:
-    from Bio import MissingPythonDependencyError
+    import cupy as np  # type: ignore
 
-    raise MissingPythonDependencyError(
-        "Install NumPy to build proteins from internal coordinates."
-    )
+    print("internal_coords using CuPy.")
+except ImportError:
+    try:
+        import numpy as np
+    except ImportError:
+        from Bio import MissingPythonDependencyError
+
+        raise MissingPythonDependencyError(
+            "Install NumPy to build proteins from internal coordinates."
+        )
 
 from Bio.File import as_handle
 from Bio.PDB.StructureBuilder import StructureBuilder
@@ -720,7 +725,7 @@ def read_PIC(
                                 line,
                             )
                         return None
-                    coord = numpy.array(
+                    coord = np.array(
                         (
                             float(m.group("x")),
                             float(m.group("y")),

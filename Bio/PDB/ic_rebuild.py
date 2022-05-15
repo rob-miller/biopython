@@ -11,13 +11,18 @@ import re
 from itertools import zip_longest
 
 try:
-    import numpy
-except ImportError:
-    from Bio import MissingPythonDependencyError
+    import cupy as np  # type: ignore
 
-    raise MissingPythonDependencyError(
-        "Install NumPy to build proteins from internal coordinates."
-    )
+    print("ic_rebuild using CuPy")
+except ImportError:
+    try:
+        import numpy as np
+    except ImportError:
+        from Bio import MissingPythonDependencyError
+
+        raise MissingPythonDependencyError(
+            "Install NumPy to build proteins from internal coordinates."
+        )
 
 from Bio.PDB.PDBExceptions import PDBException
 from io import StringIO
@@ -241,13 +246,13 @@ def _cmp_atm(
             )
         ac_rslt = False
         if rtol is None and atol is None:
-            a0c = numpy.round(a0.get_coord(), 3)
-            a1c = numpy.round(a1.get_coord(), 3)
-            ac_rslt = numpy.array_equal(a0c, a1c)
+            a0c = np.round(a0.get_coord(), 3)
+            a1c = np.round(a1.get_coord(), 3)
+            ac_rslt = np.array_equal(a0c, a1c)
         else:
             a0c = a0.get_coord()
             a1c = a1.get_coord()
-            ac_rslt = numpy.allclose(a0c, a1c, rtol=rtol, atol=atol)
+            ac_rslt = np.allclose(a0c, a1c, rtol=rtol, atol=atol)
 
         if ac_rslt:
             cmpdict["aCoordMatchCount"] += 1
@@ -380,13 +385,13 @@ def compare_residues(
 
     if quick:
         if isinstance(e0, Chain):
-            if e0.internal_coord.atomArray is not None and numpy.allclose(
+            if e0.internal_coord.atomArray is not None and np.allclose(
                 e0.internal_coord.atomArray,
                 e1.internal_coord.atomArray,
                 rtol=1e-03 if rtol is None else rtol,
                 atol=1e-03 if atol is None else atol,
             ):
-                cmpdict["aCoordMatchCount"] = numpy.size(e0.internal_coord.atomArray, 0)
+                cmpdict["aCoordMatchCount"] = np.size(e0.internal_coord.atomArray, 0)
                 if cmpdict["aCoordMatchCount"] > 0:
                     cmpdict["pass"] = True
                 else:
@@ -397,18 +402,18 @@ def compare_residues(
             cmpdict["pass"] = True
             for c0, c1 in zip_longest(e0.get_chains(), e1.get_chains()):
                 if c0.internal_coord.atomArray is not None:
-                    if numpy.allclose(
+                    if np.allclose(
                         c0.internal_coord.atomArray,
                         c1.internal_coord.atomArray,
                         rtol=1e-03 if rtol is None else rtol,
                         atol=1e-03 if atol is None else atol,
                     ):
-                        cmpdict["aCoordMatchCount"] += numpy.size(
+                        cmpdict["aCoordMatchCount"] += np.size(
                             c0.internal_coord.atomArray, 0
                         )
                     else:
                         cmpdict["pass"] = False
-                    cmpdict["aCount"] += numpy.size(c0.internal_coord.atomArray, 0)
+                    cmpdict["aCount"] += np.size(c0.internal_coord.atomArray, 0)
             if cmpdict["aCoordMatchCount"] < cmpdict["aCount"]:
                 cmpdict["pass"] = False
 

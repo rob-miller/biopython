@@ -273,13 +273,18 @@ import copy
 from numbers import Integral
 
 try:
-    import numpy as np  # type: ignore
-except ImportError:
-    from Bio import MissingPythonDependencyError
+    import cupy as np  # type: ignore
 
-    raise MissingPythonDependencyError(
-        "Install numpy to build proteins from internal coordinates."
-    )
+    print("internal_coords using CuPy")
+except ImportError:
+    try:
+        import numpy as np  # type: ignore
+    except ImportError:
+        from Bio import MissingPythonDependencyError
+
+        raise MissingPythonDependencyError(
+            "Install numpy to build proteins from internal coordinates."
+        )
 
 from Bio.PDB.Atom import Atom, DisorderedAtom
 from Bio.PDB.Polypeptide import three_to_one
@@ -613,7 +618,7 @@ class IC_Chain:
 
     # return True if a0, a1 within supplied cutoff
     def _atm_dist_chk(self, a0: Atom, a1: Atom, cutoff: float, sqCutoff: float) -> bool:
-        return sqCutoff > np.sum(np.square(a0.coord - a1.coord))
+        return sqCutoff > np.sum(np.square(np.array(a0.coord - a1.coord)))
 
     # return a string describing issue, or None if OK
     def _peptide_check(self, prev: "Residue", curr: "Residue") -> Optional[str]:
@@ -799,7 +804,7 @@ class IC_Chain:
                 ndx = self.atomArrayIndex[ak]
             except KeyError:
                 return
-            self.atomArray[ndx, 0:3] = atm.coord
+            self.atomArray[ndx, 0:3] = np.array(atm.coord)
             atm.coord = self.atomArray[ndx, 0:3]  # make view on atomArray
             self.atomArrayValid[ndx] = True
             self.bpAtomArray[ndx] = atm  # rtm
@@ -1203,6 +1208,7 @@ class IC_Chain:
             workSelector[:] = False
             for a in updateMap:
                 # copy new atom positions into dihedra atom array
+                a = np.int(a)
                 dSet[a2d_map[a]] = atomArray[a]
                 # build new workSelector from only updated dihedra
                 adlist = a2d_map[a]
@@ -1388,7 +1394,7 @@ class IC_Chain:
 
             # dihedra parts other than dihedral angle
 
-            dhlen = np.sum(self.dAtoms_needs_update)  # self.dihedraLen
+            dhlen = np.int(np.sum(self.dAtoms_needs_update))  # self.dihedraLen
 
             # only 4th atom takes work:
             # pick 4th atom based on rev flag
@@ -2195,7 +2201,7 @@ class IC_Chain:
         Also useful if copying internal coordinates from another chain.
         """
         ndx = [self.atomArrayIndex[ak] for iNCaC in other.initNCaCs for ak in iNCaC]
-        self.atomArray[ndx] = other.atomArray[ndx]
+        self.atomArray[ndx] = np.get_array_wrap(other.atomArray[ndx])
         self.atomArrayValid[ndx] = True
 
 
@@ -4390,7 +4396,7 @@ class Dihedron(Edron):
         :param bool in_rads: input values are in radians
         :param bool out_rads: report result in radians
         """
-        walst = alst if in_rads else np.deg2rad(alst)
+        walst = alst if in_rads else np.deg2rad(np.array(alst))
         ravg = np.arctan2(np.sum(np.sin(walst)), np.sum(np.cos(walst)))
         return ravg if out_rads else np.rad2deg(ravg)
 

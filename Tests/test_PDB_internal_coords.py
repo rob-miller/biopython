@@ -13,11 +13,14 @@ import warnings
 import copy
 
 try:
-    import numpy as np  # noqa F401
+    import cupy as np
 except ImportError:
-    from Bio import MissingPythonDependencyError
+    try:
+        import numpy as np  # noqa F401
+    except ImportError:
+        from Bio import MissingPythonDependencyError
 
-    raise MissingPythonDependencyError("Install NumPy if you want to use Bio.PDB.")
+        raise MissingPythonDependencyError("Install NumPy if you want to use Bio.PDB.")
 
 from Bio.PDB.ic_rebuild import (
     structure_rebuild_test,
@@ -190,16 +193,22 @@ class Rebuild(unittest.TestCase):
             try:
                 andx = ricTarg.pick_angle(ang).ndx
                 if ang == "tau":
-                    self.assertAlmostEqual(hdelta[andx], tdelta, places=4)
+                    self.assertAlmostEqual(
+                        np.float(hdelta[andx]), np.float(tdelta), places=4
+                    )
                     hdelta[andx] = 0.0
                     # some other angle has to change to accommodate tau change
                     # N-Ca-Cb is artifact of choices in ic_data
                     # expected change so clear relevant hdelta here
                     adjAngNdx = ricTarg.pick_angle("N:CA:CB").ndx
-                    self.assertNotAlmostEqual(hdelta[adjAngNdx], 0.0, places=1)
+                    self.assertNotAlmostEqual(
+                        np.float(hdelta[adjAngNdx]), 0.0, places=1
+                    )
                     hdelta[adjAngNdx] = 0.0
                 else:
-                    self.assertAlmostEqual(ddelta[andx], delta, places=4)
+                    self.assertAlmostEqual(
+                        np.float(ddelta[andx]), np.float(delta), places=4
+                    )
                     ddelta[andx] = 0.0
             except AttributeError:
                 pass  # if residue does not have e.g. chi5
@@ -306,21 +315,29 @@ class Rebuild(unittest.TestCase):
                 if ric.rprev != [] and tau is not None:
                     ttcount += 1
                     # print(str(r), "tau", tau, nvt[str(r)])
-                    self.assertAlmostEqual(tau, nvt[str(r)], places=3)
+                    self.assertAlmostEqual(
+                        np.float(tau), np.float(nvt[str(r)]), places=3
+                    )
                 chi1 = ric.get_angle("chi1")
                 if chi1 is not None:
                     c1tcount += 1
                     # print(str(r), "chi1", chi1, nvc1[str(r)])
-                    self.assertAlmostEqual(chi1, nvc1[str(r)], places=3)
+                    self.assertAlmostEqual(
+                        np.float(chi1), np.float(nvc1[str(r)]), places=3
+                    )
                 psi = ric.get_angle("psi")
                 if psi is not None:
                     psitcount += 1
                     # print(str(r), "psi", psi, nvpsi[str(r)])
-                    self.assertAlmostEqual(psi, nvpsi[str(r)], places=3)
+                    self.assertAlmostEqual(
+                        np.float(psi), np.float(nvpsi[str(r)]), places=3
+                    )
                 leng = ric.get_length("CA:CB")
                 if leng is not None:
                     ltcount += 1
-                    self.assertAlmostEqual(leng, nvlen[str(r)], places=3)
+                    self.assertAlmostEqual(
+                        np.float(leng), np.float(nvlen[str(r)]), places=3
+                    )
 
         self.assertEqual(tcount, ttcount)
         self.assertEqual(c1count, c1tcount)
@@ -475,7 +492,7 @@ class Rebuild(unittest.TestCase):
         ]
         dplot0 = _chn1.internal_coord.distance_plot(filter=CaSelect)
         self.assertAlmostEqual(
-            dplot0[3, 9],
+            np.float(dplot0[3, 9]),
             16.296,
             places=3,
             msg="fail generate distance plot with filter",
